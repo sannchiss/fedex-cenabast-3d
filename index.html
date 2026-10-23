@@ -1,0 +1,3054 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gemelo Digital 3D Pro - FedEx, Middleware Webhook & CENABAST API v1.6.0</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    :root {
+      --fedex-purple: #4D148C;
+      --fedex-orange: #FF6600;
+      --cenabast-cyan: #00E5FF;
+      --mw-amber: #F59E0B;
+    }
+    * { box-sizing: border-box; user-select: none; }
+    body, html {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      overflow: hidden; background-color: #040710;
+      font-family: 'Inter', sans-serif; color: #F8FAFC;
+    }
+    #canvas-container {
+      position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 1;
+      cursor: grab;
+    }
+    #canvas-container:active {
+      cursor: grabbing;
+    }
+    .glass {
+      background: rgba(8, 12, 24, 0.86);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.72);
+    }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); }
+    ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.35); border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 102, 0, 0.75); }
+
+    /* Gavetas perimetrales con transición suave */
+    .drawer-left { transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease; }
+    .drawer-left.collapsed { transform: translateX(calc(-100% - 16px)); opacity: 0; pointer-events: none; }
+    .drawer-right { transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease; }
+    .drawer-right.collapsed { transform: translateX(calc(100% + 16px)); opacity: 0; pointer-events: none; }
+    .drawer-bottom { transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease; }
+    .drawer-bottom.collapsed { transform: translateY(calc(100% + 16px)); opacity: 0; pointer-events: none; }
+
+    /* Etiquetas 3D de edificios ancladas */
+    .node-label {
+      position: absolute; transform: translate(-50%, -100%);
+      pointer-events: auto; cursor: pointer;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+      z-index: 10;
+    }
+    .node-label:hover {
+      border-color: #00E5FF !important;
+      box-shadow: 0 0 22px rgba(0, 229, 255, 0.55);
+      background: rgba(15, 23, 42, 0.96);
+    }
+    .node-label.active-node {
+      border-color: #FF6600 !important;
+      box-shadow: 0 0 24px rgba(255, 102, 0, 0.75);
+    }
+    .ship-tag {
+      position: absolute; transform: translate(-50%, -50%);
+      pointer-events: auto; cursor: pointer; z-index: 12;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.82);
+      display: flex; align-items: center; gap: 4px;
+    }
+
+    /* Micro-Pills Ultra Compactas y Anticolisión con Mapeo de Estado CENABAST */
+    .packet-tag {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 16;
+      background: rgba(5, 9, 20, 0.96);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      padding: 2.5px 7px;
+      border-radius: 6px;
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.88);
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9.5px;
+      line-height: 1.15;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 6px; background: rgba(148, 163, 184, 0.25);
+      border-radius: 999px; outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: #FF6600; cursor: pointer;
+      border: 2px solid #fff; box-shadow: 0 0 10px rgba(255,102,0,0.8);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- LIENZO 3D THREE.JS -->
+  <div id="canvas-container" title="Clic Derecho + Arrastrar: Deslizar Lienzo | Rueda Scroll: Zoom | Clic Izquierdo: Rotar o Arrastrar"></div>
+
+  <!-- CAPA SVG DE LÍNEAS GUÍA (CONECTA CADA ETIQUETA DESPLAZADA CON SU ESFERA 3D) -->
+  <svg id="tethers-layer" class="fixed inset-0 pointer-events-none z-10 w-full h-full overflow-visible"></svg>
+
+  <!-- CAPA DE ETIQUETAS 3D FLOTANTES SIN SOLAPAMIENTO -->
+  <div id="labels-layer" class="fixed inset-0 pointer-events-none z-10 overflow-hidden"></div>
+
+  <!-- BARRA SUPERIOR COMPACTA -->
+  <header class="fixed top-2.5 left-3 right-3 z-30 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+    <div class="glass rounded-xl px-3.5 py-2 flex items-center gap-2.5 pointer-events-auto">
+      <div class="flex items-center select-none shadow">
+        <span class="text-xl font-extrabold tracking-tighter text-[#4D148C] bg-white px-1.5 py-0.5 rounded-l">Fed</span>
+        <span class="text-xl font-extrabold tracking-tighter text-[#FF6600] bg-white pr-1.5 py-0.5 rounded-r">Ex</span>
+      </div>
+      <span class="text-slate-500 text-xs font-bold">➔</span>
+      <span class="px-2 py-0.5 rounded text-[11px] font-bold mono bg-amber-500/20 text-amber-300 border border-amber-400/40">
+        ⚡ MIDDLEWARE WEBHOOK
+      </span>
+      <span class="text-slate-500 text-xs font-bold">➔</span>
+      <span class="px-2 py-0.5 rounded text-[11px] font-bold mono bg-cyan-500/20 text-cyan-300 border border-cyan-400/40">
+        ☁️ CENABAST API v1.6.0
+      </span>
+    </div>
+
+    <!-- Controles de Navegación 3D, Deslizamiento y Cámara -->
+    <div class="glass rounded-xl px-2.5 py-1.5 flex items-center gap-1.5 pointer-events-auto">
+      <button id="btn-pan-left" class="px-2 py-1 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition" title="Deslizar cámara a la izquierda (Ver Laboratorios)">
+        ◀ Izq
+      </button>
+      <button id="btn-pan-right" class="px-2 py-1 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition" title="Deslizar cámara a la derecha (Ver Hospital y Farmacia)">
+        Der ▶
+      </button>
+      <button id="btn-zoom-in" class="px-2 py-1 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 transition" title="Acercar Zoom">
+        ➕
+      </button>
+      <button id="btn-zoom-out" class="px-2 py-1 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 transition" title="Alejar Zoom">
+        ➖
+      </button>
+      <div class="h-4 w-px bg-slate-700 mx-0.5"></div>
+      <button id="btn-mouse-mode" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 transition flex items-center gap-1" title="Cambiar función del Clic Izquierdo entre Rotar 3D y Arrastrar Lienzo (El Clic Derecho siempre arrastra)">
+        🖱️ Clic Der: Arrastrar
+      </button>
+      <button id="btn-fit-scene" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 transition flex items-center gap-1" title="Centrar todo el flujo 3D en el área libre">
+        🎯 Encuadrar
+      </button>
+      <button id="btn-top-view" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition flex items-center gap-1">
+        📐 Mapa
+      </button>
+      <button id="btn-focus-mw" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 transition flex items-center gap-1">
+        ⚡ Middleware
+      </button>
+      <button id="btn-cinema-mode" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border border-orange-500/40 transition flex items-center gap-1">
+        👁️ Modo Cine
+      </button>
+    </div>
+
+    <!-- KPIs Rápidos -->
+    <div class="glass rounded-xl px-3 py-1.5 hidden 2xl:flex items-center gap-3 pointer-events-auto text-xs mono">
+      <div><span class="text-slate-400">En Red:</span> <strong id="kpi-active" class="text-white">0</strong></div>
+      <div class="h-3 w-px bg-slate-700"></div>
+      <div><span class="text-slate-400">Webhooks:</span> <strong id="kpi-webhooks" class="text-amber-400">0</strong></div>
+      <div class="h-3 w-px bg-slate-700"></div>
+      <div><span class="text-slate-400">201/200 OK:</span> <strong id="kpi-201" class="text-emerald-400">0</strong></div>
+      <div class="h-3 w-px bg-slate-700"></div>
+      <div><span class="text-slate-400">400 Err:</span> <strong id="kpi-400" class="text-rose-400">0</strong></div>
+    </div>
+  </header>
+
+  <!-- LEYENDA RÁPIDA DE MAPEO DE ESTADOS CENABAST & CONTROL CURSOR -->
+  <div class="fixed top-14 left-1/2 -translate-x-1/2 z-20 pointer-events-none hidden lg:flex items-center gap-2.5 glass px-3.5 py-1 rounded-full text-[10.5px] text-slate-300 border border-slate-700/80 shadow-lg mono">
+    <span class="text-amber-300 font-bold">Mapeo CENABAST:</span>
+    <span class="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 border border-sky-500/40">Est:1 Prep.</span>
+    <span class="px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">Mov:2 / Est:2 En Tránsito</span>
+    <span class="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">Mov:1 / Est:3 Conforme</span>
+    <span class="px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">Mov:3 / Est:4 Rechazado</span>
+    <span class="text-slate-600">|</span>
+    <span class="font-sans text-slate-400">🖱️ Clic Der + Arrastrar: Mover • Scroll: Zoom</span>
+  </div>
+
+  <!-- BOTONES FLOTANTES PARA REABRIR PANELES COLAPSADOS -->
+  <button id="reopen-left" class="hidden fixed top-16 left-3 z-30 glass px-3 py-2 rounded-xl text-xs font-bold text-cyan-300 border border-cyan-500/40 hover:bg-slate-800/90 transition shadow-lg">
+    ▶ Mostrar Control & Despachos
+  </button>
+  <button id="reopen-right" class="hidden fixed top-16 right-3 z-30 glass px-3 py-2 rounded-xl text-xs font-bold text-amber-300 border border-amber-500/40 hover:bg-slate-800/90 transition shadow-lg">
+    ◀ Mostrar Middleware & JSON
+  </button>
+  <button id="reopen-bottom" class="hidden fixed bottom-3 left-1/2 -translate-x-1/2 z-30 glass px-4 py-2 rounded-xl text-xs font-bold text-emerald-300 border border-emerald-500/40 hover:bg-slate-800/90 transition shadow-lg">
+    ▲ Mostrar Monitor de Módulos (Llegando / En Nodo / Procesados)
+  </button>
+
+  <!-- PANEL IZQUIERDO: CONTROL DE DESPACHO, VELOCIDAD Y LISTA ACTIVA -->
+  <aside id="panel-left" class="drawer-left fixed top-16 left-3 bottom-3 w-72 z-20 flex flex-col gap-2.5 pointer-events-none">
+    <div class="glass rounded-2xl p-3.5 flex flex-col gap-2.5 pointer-events-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+        <span class="text-xs font-extrabold tracking-wider uppercase text-slate-200">1. Despacho & Control</span>
+        <button id="collapse-left" class="text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+          ◀ Ocultar
+        </button>
+      </div>
+
+      <!-- Selectores de Despacho -->
+      <div class="space-y-2 text-xs">
+        <div>
+          <label class="block text-[10px] font-semibold uppercase text-slate-400 mb-1">Laboratorio / Farmacia Proveedor (RUT)</label>
+          <select id="sel-lab" class="w-full bg-slate-900/90 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:border-orange-500 outline-none">
+            <option value="0">Lab Clínico Norte (RUT: 765432109) - Lidocaína</option>
+            <option value="1">Lab Farmacéutico Central (RUT: 99999999) - Paracetamol</option>
+            <option value="2">Lab Biotecnológico Sur (RUT: 887766554) - Insulina Frío</option>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-2 gap-1.5">
+          <div>
+            <label class="block text-[10px] font-semibold uppercase text-slate-400 mb-1">Regla Doc (7.1)</label>
+            <select id="sel-doc-rule" class="w-full bg-slate-900/90 border border-slate-700 rounded-lg px-2 py-1.5 text-[11px] text-slate-100 outline-none">
+              <option value="guia">Con Guía (Factura=0)</option>
+              <option value="factura">Con Factura (Guía=0)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[10px] font-semibold uppercase text-slate-400 mb-1">Vía Troncal FedEx</label>
+            <select id="sel-transport" class="w-full bg-slate-900/90 border border-slate-700 rounded-lg px-2 py-1.5 text-[11px] text-slate-100 outline-none">
+              <option value="air">✈️ Aéreo Overnight</option>
+              <option value="ground">🚛 Terrestre Frío</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-[10px] font-semibold uppercase text-slate-400 mb-1">Estado Final CENABAST (Mov / Tracking)</label>
+          <select id="sel-outcome" class="w-full bg-slate-900/90 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 outline-none">
+            <option value="1">Mov:1 Entrega Conforme | Est:3 Entregado (+Cedible)</option>
+            <option value="3">Mov:3 Rechazado | Est:4 Rechazado (Excursión Frío)</option>
+            <option value="5">Est:5 Anulado en Tracking (Guía Anulada)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Botones de Acción API & Webhook -->
+      <button id="btn-spawn" class="w-full py-2 px-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-[#4D148C] via-[#7c22ce] to-[#FF6600] hover:brightness-110 active:scale-[0.99] transition shadow-lg flex items-center justify-center gap-1.5">
+        🚀 Generar Guía FedEx (13 Díg.) + Webhook
+      </button>
+
+      <div class="grid grid-cols-3 gap-1.5">
+        <button id="btn-auth-ping" class="py-1.5 px-1.5 rounded-lg text-[10px] font-semibold bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition" title="Probar GET echoping + POST authenticate en Middleware">
+          🔑 Auth JWT
+        </button>
+        <button id="btn-put-anexo3" class="py-1.5 px-1.5 rounded-lg text-[10px] font-semibold bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 transition" title="Ejecutar actualización GET -> PUT Anexo N°3">
+          🔄 PUT Anexo3
+        </button>
+        <button id="btn-error-400" class="py-1.5 px-1.5 rounded-lg text-[10px] font-semibold bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition" title="Simular rechazo HTTP 400 por RUT con guion">
+          ⚠️ Error 400
+        </button>
+      </div>
+
+      <!-- Control de Velocidad Lento y Preciso -->
+      <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-2.5 space-y-2">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1">
+            <button id="btn-pause" class="px-2 py-1 rounded text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 transition">
+              ⏸ Pausar
+            </button>
+            <button id="btn-step" class="px-2 py-1 rounded text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 transition" title="Gatillar siguiente hito/webhook del envío seleccionado">
+              ⏭ Hito
+            </button>
+            <button id="btn-auto" class="px-2 py-1 rounded text-[11px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30 transition">
+              Auto: ON
+            </button>
+          </div>
+          <span id="speed-label" class="text-[11px] font-bold mono text-orange-400">0.25x Lento</span>
+        </div>
+
+        <input id="speed-slider" type="range" min="0.05" max="1.8" step="0.05" value="0.25" />
+
+        <div class="grid grid-cols-5 gap-1 text-[10px] mono">
+          <button data-speed="0.1" class="speed-preset py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">0.1x</button>
+          <button data-speed="0.25" class="speed-preset py-1 rounded bg-orange-500/30 text-orange-300 border border-orange-500/50 font-bold">0.25x</button>
+          <button data-speed="0.5" class="speed-preset py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">0.5x</button>
+          <button data-speed="1.0" class="speed-preset py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">1.0x</button>
+          <button data-speed="1.6" class="speed-preset py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">1.6x</button>
+        </div>
+
+        <label class="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer pt-0.5">
+          <input id="chk-autopause" type="checkbox" class="rounded accent-orange-500" />
+          <span>Congelar 3.5s en cada Hito Webhook/API</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Lista de Despachos Activos -->
+    <div class="glass rounded-2xl p-3 flex-1 flex flex-col min-h-0 pointer-events-auto">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Despachos y Estado CENABAST</span>
+        <span id="active-count-badge" class="text-[11px] mono px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300">0</span>
+      </div>
+      <div id="shipments-list" class="flex-1 overflow-y-auto space-y-1.5 pr-1"></div>
+    </div>
+  </aside>
+
+  <!-- PANEL DERECHO: CONSOLA MIDDLEWARE (WEBHOOK ➔ API) & INSPECTOR CENABAST -->
+  <aside id="panel-right" class="drawer-right fixed top-16 right-3 bottom-3 w-96 z-20 flex flex-col gap-2.5 pointer-events-none">
+    <div class="glass rounded-2xl p-3.5 flex-1 flex flex-col min-h-0 pointer-events-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+        <div>
+          <span class="text-xs font-extrabold uppercase tracking-wider text-amber-300">2. Consola Middleware & API</span>
+          <p id="inspected-doc-subtitle" class="text-[11px] mono text-slate-400">Selecciona un envío o módulo</p>
+        </div>
+        <div class="flex items-center gap-1">
+          <button id="btn-follow-cam" class="text-[11px] px-2 py-0.5 rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 transition">
+            🎥 Seguir
+          </button>
+          <button id="collapse-right" class="text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+            Ocultar ▶
+          </button>
+        </div>
+      </div>
+
+      <!-- Pestañas del Inspector -->
+      <div class="grid grid-cols-5 gap-1 bg-slate-900/90 p-1 rounded-xl mb-2.5 text-[10px] font-bold">
+        <button data-tab="middleware" class="insp-tab py-1.5 rounded-lg bg-amber-500/25 text-amber-300 border border-amber-500/40">⚡ Middleware</button>
+        <button data-tab="payload" class="insp-tab py-1.5 rounded-lg text-slate-400 hover:text-white">📦 JSON API</button>
+        <button data-tab="tracking" class="insp-tab py-1.5 rounded-lg text-slate-400 hover:text-white">📍 Tracking</button>
+        <button data-tab="cedible" class="insp-tab py-1.5 rounded-lg text-slate-400 hover:text-white">📄 Cedible</button>
+        <button data-tab="logs" class="insp-tab py-1.5 rounded-lg text-slate-400 hover:text-white">📜 Bitácora</button>
+      </div>
+
+      <!-- Contenido Dinámico de la Pestaña -->
+      <div id="inspector-body" class="flex-1 overflow-y-auto space-y-2.5 pr-1 text-xs"></div>
+    </div>
+  </aside>
+
+  <!-- PANEL INFERIOR CENTRAL: MONITOR EN VIVO DE MÓDULOS (LLEGANDO / EN NODO / PROCESADOS) -->
+  <section id="panel-bottom" class="drawer-bottom fixed bottom-3 left-80 right-[25rem] z-20 pointer-events-none">
+    <div class="glass rounded-2xl p-3 pointer-events-auto">
+      <div class="flex flex-wrap items-center justify-between gap-2 pb-2 mb-2 border-b border-slate-800">
+        <div class="flex items-center gap-2">
+          <span id="mod-icon" class="text-lg">⚡</span>
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 id="mod-title" class="text-xs font-extrabold text-white uppercase tracking-wide">Módulo Middleware Integrador (FedEx Webhook ➔ CENABAST API)</h3>
+              <span id="mod-badge" class="text-[10px] mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">CAPA INTERMEDIA OAuth 2.0</span>
+            </div>
+            <p id="mod-endpoint" class="text-[11px] mono text-cyan-300">Escucha: POST /webhook/fedex-events ➔ Traduce a DescMovimiento (1,2,3) y DistribucionEstado (1..5)</p>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-1.5">
+          <button id="btn-center-module" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 transition">
+            🎯 Enfocar Módulo 3D
+          </button>
+          <button id="collapse-bottom" class="px-2 py-1 rounded-lg text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+            ▼ Minimizar
+          </button>
+        </div>
+      </div>
+
+      <!-- Selector Rápido de Módulos -->
+      <div id="module-pills" class="flex items-center gap-1.5 overflow-x-auto pb-2 mb-2">
+        <button data-mod="LAB_0" class="mod-pill px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800/90 hover:bg-slate-700 text-slate-300 whitespace-nowrap">🧪 Lab Norte</button>
+        <button data-mod="LAB_1" class="mod-pill px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800/90 hover:bg-slate-700 text-slate-300 whitespace-nowrap">💊 Lab Farmacéutico</button>
+        <button data-mod="LAB_2" class="mod-pill px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800/90 hover:bg-slate-700 text-slate-300 whitespace-nowrap">🧬 Lab Biotech Sur</button>
+        <button data-mod="ORIGIN" class="mod-pill px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800/90 hover:bg-slate-700 text-slate-300 whitespace-nowrap">📦 Bodega Vespucio</button>
+        <button data-mod="HUB" class="mod-pill px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800/90 hover:bg-slate-700 text-slate-300 whitespace-nowrap">❄️ SuperHub Frío</button>
+        <button data-mod="DEST" class="mod-pill px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800/90 hover:bg-slate-700 text-slate-300 whitespace-nowrap">🚚 Estación Destino</button>
+        <button data-mod="HOSP" class="mod-pill px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800/90 hover:bg-slate-700 text-slate-300 whitespace-nowrap">🏥 Hospital & Farmacia S.N.S.S.</button>
+        <button data-mod="MIDDLEWARE" class="mod-pill px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-500/30 text-amber-200 border border-amber-400 whitespace-nowrap">⚡ Middleware Webhook</button>
+        <button data-mod="CLOUD" class="mod-pill px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800/90 hover:bg-slate-700 text-slate-300 whitespace-nowrap">☁️ Gateway CENABAST</button>
+      </div>
+
+      <!-- 3 Columnas: Llegando / En este Módulo Ahora / Ya Procesados -->
+      <div class="grid grid-cols-3 gap-2.5 text-xs">
+        <div class="bg-slate-900/75 border border-slate-800 rounded-xl p-2">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[11px] font-bold text-amber-300">📥 Llegando al Módulo (Inbound)</span>
+            <span id="mod-count-in" class="text-[10px] mono px-1.5 rounded bg-amber-500/20 text-amber-300">0</span>
+          </div>
+          <div id="mod-list-in" class="space-y-1 max-h-20 overflow-y-auto text-[11px] mono"></div>
+        </div>
+
+        <div class="bg-slate-900/75 border border-slate-800 rounded-xl p-2">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[11px] font-bold text-cyan-300">⚙️ Ejecutando Ahora en Módulo</span>
+            <span id="mod-count-curr" class="text-[10px] mono px-1.5 rounded bg-cyan-500/20 text-cyan-300">0</span>
+          </div>
+          <div id="mod-list-curr" class="space-y-1 max-h-20 overflow-y-auto text-[11px] mono"></div>
+        </div>
+
+        <div class="bg-slate-900/75 border border-slate-800 rounded-xl p-2">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[11px] font-bold text-emerald-300">✅ Ya Procesados (Outbound)</span>
+            <span id="mod-count-out" class="text-[10px] mono px-1.5 rounded bg-emerald-500/20 text-emerald-300">0</span>
+          </div>
+          <div id="mod-list-out" class="space-y-1 max-h-20 overflow-y-auto text-[11px] mono"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    /*************************************************************************
+     * 1. CONFIGURACIÓN DE LABORATORIOS, FARMACIAS Y POSICIONES 3D
+     *************************************************************************/
+    const LABS_CONFIG = [
+      {
+        id: 0,
+        key: 'LAB_0',
+        name: 'Lab Clínico Norte',
+        rut: '765432109',
+        shipperAccount: 'FX-CL-765432109',
+        articulo: 'LIDOCAINA 10% SOL. TOP. X 50 M',
+        lote: '03178',
+        vencimiento: '30-12-2027',
+        cantidad: 40,
+        temp: '2°C a 8°C',
+        color: 0x38bdf8,
+        accentHex: '#38bdf8',
+        pos: new THREE.Vector3(-98, 0, -30)
+      },
+      {
+        id: 1,
+        key: 'LAB_1',
+        name: 'Lab Farmacéutico Central',
+        rut: '99999999',
+        shipperAccount: 'FX-CL-99999999',
+        articulo: 'PARACETAMOL 500MG COMP.',
+        lote: 'LOT2026001',
+        vencimiento: '31-12-2027',
+        cantidad: 100,
+        temp: '15°C a 25°C',
+        color: 0xa855f7,
+        accentHex: '#a855f7',
+        pos: new THREE.Vector3(-98, 0, 2)
+      },
+      {
+        id: 2,
+        key: 'LAB_2',
+        name: 'Lab Biotecnológico Sur',
+        rut: '887766554',
+        shipperAccount: 'FX-CL-887766554',
+        articulo: 'INSULINA HUMANA 100UI/ML',
+        lote: '28TKA000',
+        vencimiento: '15-08-2027',
+        cantidad: 75,
+        temp: '2°C a 8°C (Frío)',
+        color: 0x10b981,
+        accentHex: '#10b981',
+        pos: new THREE.Vector3(-98, 0, 34)
+      }
+    ];
+
+    const NODE_POSITIONS = {
+      originStation: new THREE.Vector3(-48, 0, 2),
+      superHub:      new THREE.Vector3(0, 0, 2),
+      destStation:   new THREE.Vector3(48, 0, 2),
+      hospital:      new THREE.Vector3(96, 0, 2),
+      middleware:    new THREE.Vector3(-26, 26, -18),
+      cenabastCloud: new THREE.Vector3(30, 26, -18)
+    };
+
+    const MODULES_DIRECTORY = {
+      LAB_0: {
+        key: 'LAB_0', title: 'Planta & Farmacia Lab Clínico Norte (RUT 765432109)', icon: '🧪',
+        badge: 'ETAPA 1 • EST:1 EN PREPARACIÓN',
+        endpoint: 'Guía FedEx 13 Díg. ➔ POST /api/v1/proveedor/distribucion (Mov:2 En Tránsito)',
+        pos: LABS_CONFIG[0].pos, stageFilter: 1, labIndex: 0, history: []
+      },
+      LAB_1: {
+        key: 'LAB_1', title: 'Planta & Farmacia Lab Central (RUT 99999999)', icon: '💊',
+        badge: 'ETAPA 1 • EST:1 EN PREPARACIÓN',
+        endpoint: 'Guía FedEx 13 Díg. ➔ POST /api/v1/proveedor/distribucion (Mov:2 En Tránsito)',
+        pos: LABS_CONFIG[1].pos, stageFilter: 1, labIndex: 1, history: []
+      },
+      LAB_2: {
+        key: 'LAB_2', title: 'Planta Biotecnológica Sur - Cadena de Frío (RUT 887766554)', icon: '🧬',
+        badge: 'ETAPA 1 • EST:1 EN PREPARACIÓN',
+        endpoint: 'Guía FedEx 13 Díg. ➔ POST /api/v1/proveedor/distribucion (Mov:2 En Tránsito)',
+        pos: LABS_CONFIG[2].pos, stageFilter: 1, labIndex: 2, history: []
+      },
+      ORIGIN: {
+        key: 'ORIGIN', title: 'Bodega Central Américo Vespucio (FedEx Origin)', icon: '📦',
+        badge: 'ETAPA 3 • MOV:2 EN TRÁNSITO',
+        endpoint: 'Webhook SCAN ORIGEN ➔ Middleware ➔ POST /distribucion/{Doc}/movimiento (DescMovimiento: 2)',
+        pos: NODE_POSITIONS.originStation, stageFilter: 3, inboundStages: [2], history: []
+      },
+      HUB: {
+        key: 'HUB', title: 'FedEx SuperHub Central & Cámara Fría 2°C-8°C', icon: '❄️',
+        badge: 'ETAPA 4 • GET IDs ANEXO N°3',
+        endpoint: 'Webhook HUB FRÍO ➔ Middleware ejecuta GET /api/v1/Public/distribucion/{Doc_Cenabast}',
+        pos: NODE_POSITIONS.superHub, stageFilter: 4, inboundStages: [3], history: []
+      },
+      DEST: {
+        key: 'DEST', title: 'Estación Destino Regional (Out for Delivery)', icon: '🚚',
+        badge: 'ETAPA 6 • PUT ANEXO N°3 (MOV:2)',
+        endpoint: 'Webhook SALIDA REPARTO ➔ Middleware ejecuta PUT /api/v1/proveedor/distribucion/{Doc}',
+        pos: NODE_POSITIONS.destStation, stageFilter: 6, inboundStages: [5], history: []
+      },
+      HOSP: {
+        key: 'HOSP', title: 'Hospital S.N.S.S. & Farmacia Clínica Recepción (POD + Cedible)', icon: '🏥',
+        badge: 'ETAPAS 7 & 8 • MOV:1 CONFORME / MOV:3 RECHAZADO',
+        endpoint: 'Webhook POD ➔ POST /movimiento (1:Conforme | 3:Rechazado) + POST /proveedor/cedible',
+        pos: NODE_POSITIONS.hospital, stageFilter: 7, inboundStages: [6], history: []
+      },
+      MIDDLEWARE: {
+        key: 'MIDDLEWARE', title: 'Módulo Middleware Integrador (FedEx Webhook ➔ CENABAST API)', icon: '⚡',
+        badge: 'TRADUCTOR DE ESTADOS CENABAST',
+        endpoint: 'Traduce Eventos FedEx (Pickup, Scan, POD) ➔ DescMovimiento (1,2,3) y DistribucionEstado (1..5)',
+        pos: NODE_POSITIONS.middleware, stageFilter: -1, history: []
+      },
+      CLOUD: {
+        key: 'CLOUD', title: 'Núcleo CENABAST API Gateway v1.6.0 & SAP Sync', icon: '☁️',
+        badge: 'SERVIDOR ESTATAL REST',
+        endpoint: 'Recibe Peticiones REST autenticadas desde el Middleware y sincroniza con ERP SAP',
+        pos: NODE_POSITIONS.cenabastCloud, stageFilter: -2, history: []
+      }
+    };
+
+    /*************************************************************************
+     * 2. ESTADO GLOBAL DE LA SIMULACIÓN Y ELEMENTOS ANIMADOS
+     *************************************************************************/
+    let scene, camera, renderer, controls;
+    const clock = new THREE.Clock();
+
+    let simSpeed = 0.25;
+    let isPaused = false;
+    let autoPauseOnApiHit = false;
+    let autoPauseTimer = null;
+    let autoSpawn = true;
+    let autoSpawnAccumulator = 0;
+    let leftClickPanMode = false;
+
+    let docCounter = 300000004;
+    // Guía de FedEx: Comienza con 8 y tiene exactamente 13 dígitos
+    let guiaCounter = 8829510482910;
+    let facturaCounter = 218460;
+    let idDistCounter = 673010;
+    let idDetCounter = 735859;
+    let idMovCounter = 3075518;
+
+    let kpiWebhooks = 0;
+    let kpi201 = 0;
+    let kpi400 = 0;
+
+    const shipments = [];
+    const dataPackets = [];
+    const apiLogs = [];
+    const middlewareActiveQueue = [];
+
+    let selectedShipment = null;
+    let followShipmentCamera = false;
+    let selectedModuleKey = 'MIDDLEWARE';
+    let activeInspectorTab = 'middleware';
+    let cameraLerpGoal = null;
+
+    let middlewareCoreGroup, middlewareRings = [], cenabastCoreGroup, cenabastRings = [], moduleHighlightRing;
+    const animatedProps = [];
+    const htmlLabels = [];
+
+    /*************************************************************************
+     * 3. GENERADORES DE TEXTURAS PROCEDURALES DE ALTA DEFINICIÓN
+     *************************************************************************/
+    function createWindowFacadeTexture(accentColorHex = '#38bdf8', rows = 4, cols = 8) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+
+      ctx.fillStyle = '#090d1a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const padX = 14, padY = 14;
+      const w = (canvas.width - padX * (cols + 1)) / cols;
+      const h = (canvas.height - padY * (rows + 1)) / rows;
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const lit = Math.random() > 0.18;
+          ctx.fillStyle = lit ? accentColorHex : '#1e293b';
+          ctx.globalAlpha = lit ? (0.55 + Math.random() * 0.4) : 0.35;
+          ctx.fillRect(padX + c * (w + padX), padY + r * (h + padY), w, h);
+        }
+      }
+      ctx.globalAlpha = 1.0;
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      return tex;
+    }
+
+    function createHelipadTexture() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, 256, 256);
+
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 10;
+      ctx.beginPath();
+      ctx.arc(128, 128, 100, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 120px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('H', 128, 134);
+
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    /*************************************************************************
+     * 4. INICIALIZACIÓN DE THREE.JS Y CONTROLES DE CURSOR (PAN + ZOOM)
+     *************************************************************************/
+    function initThree() {
+      const container = document.getElementById('canvas-container');
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x040710);
+      scene.fog = new THREE.FogExp2(0x040710, 0.0022);
+
+      camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.5, 1000);
+      camera.position.set(0, 68, 142);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.15;
+      container.appendChild(renderer.domElement);
+
+      renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.07;
+      controls.enablePan = true;
+      controls.panSpeed = 1.45;
+      controls.screenSpacePanning = true;
+      controls.enableZoom = true;
+      controls.zoomSpeed = 1.3;
+      controls.maxPolarAngle = Math.PI / 2 - 0.02;
+      controls.minDistance = 12;
+      controls.maxDistance = 340;
+      controls.target.set(0, 6, 0);
+
+      controls.mouseButtons = {
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN
+      };
+
+      controls.addEventListener('start', () => {
+        cameraLerpGoal = null;
+        followShipmentCamera = false;
+        updateFollowButtonUI();
+      });
+
+      scene.add(new THREE.AmbientLight(0xdbeafe, 0.95));
+
+      const hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x0f172a, 0.55);
+      hemiLight.position.set(0, 120, 0);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+      dirLight.position.set(65, 130, 85);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 2048;
+      dirLight.shadow.mapSize.height = 2048;
+      scene.add(dirLight);
+
+      const mwLight = new THREE.PointLight(0xf59e0b, 4.2, 95);
+      mwLight.position.copy(NODE_POSITIONS.middleware);
+      scene.add(mwLight);
+
+      const cenLight = new THREE.PointLight(0x00e5ff, 4.2, 100);
+      cenLight.position.copy(NODE_POSITIONS.cenabastCloud);
+      scene.add(cenLight);
+
+      const hospLight = new THREE.PointLight(0x10b981, 3.0, 65);
+      hospLight.position.copy(NODE_POSITIONS.hospital).add(new THREE.Vector3(0, 14, 4));
+      scene.add(hospLight);
+
+      const groundPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(420, 260),
+        new THREE.MeshStandardMaterial({ color: 0x060a15, roughness: 0.75, metalness: 0.25 })
+      );
+      groundPlane.rotation.x = -Math.PI / 2;
+      groundPlane.position.y = -0.15;
+      groundPlane.receiveShadow = true;
+      scene.add(groundPlane);
+
+      const grid = new THREE.GridHelper(340, 68, 0x1e293b, 0x0f172a);
+      grid.position.y = -0.08;
+      scene.add(grid);
+
+      const ringGeo = new THREE.RingGeometry(9.8, 11.4, 64);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
+      moduleHighlightRing = new THREE.Mesh(ringGeo, ringMat);
+      moduleHighlightRing.rotation.x = -Math.PI / 2;
+      moduleHighlightRing.position.set(NODE_POSITIONS.middleware.x, 0.25, NODE_POSITIONS.middleware.z);
+      scene.add(moduleHighlightRing);
+
+      buildRealisticWorld3D();
+      buildRoadsAndFiberNetwork3D();
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        applySmartViewportOffset();
+      });
+
+      applySmartViewportOffset();
+    }
+
+    function applySmartViewportOffset() {
+      const fullW = window.innerWidth;
+      const fullH = window.innerHeight;
+
+      const leftPanel = document.getElementById('panel-left');
+      const rightPanel = document.getElementById('panel-right');
+      const bottomPanel = document.getElementById('panel-bottom');
+
+      const leftOpen = !leftPanel.classList.contains('collapsed');
+      const rightOpen = !rightPanel.classList.contains('collapsed');
+      const bottomOpen = !bottomPanel.classList.contains('collapsed');
+
+      const padLeft = leftOpen ? 300 : 16;
+      const padRight = rightOpen ? 396 : 16;
+      const padTop = 58;
+      const padBottom = bottomOpen ? 195 : 16;
+
+      const freeCenterX = padLeft + (fullW - padLeft - padRight) * 0.5;
+      const freeCenterY = padTop + (fullH - padTop - padBottom) * 0.5;
+
+      const offsetX = (fullW * 0.5) - freeCenterX;
+      const offsetY = (fullH * 0.5) - freeCenterY;
+
+      camera.setViewOffset(fullW, fullH, offsetX, offsetY, fullW, fullH);
+      camera.updateProjectionMatrix();
+    }
+
+    function fitEntireNetwork3D(topDown = false) {
+      followShipmentCamera = false;
+      updateFollowButtonUI();
+
+      const leftOpen = !document.getElementById('panel-left').classList.contains('collapsed');
+      const rightOpen = !document.getElementById('panel-right').classList.contains('collapsed');
+      const freeWidthRatio = Math.max(0.36, (window.innerWidth - (leftOpen ? 300 : 0) - (rightOpen ? 396 : 0)) / window.innerWidth);
+      const distScale = THREE.MathUtils.clamp(1 / freeWidthRatio, 1.0, 1.72);
+
+      if (topDown) {
+        cameraLerpGoal = {
+          pos: new THREE.Vector3(0, 178 * distScale, 8),
+          target: new THREE.Vector3(0, 4, -4)
+        };
+      } else {
+        cameraLerpGoal = {
+          pos: new THREE.Vector3(0, 68 * distScale, 138 * distScale),
+          target: new THREE.Vector3(0, 8, -4)
+        };
+      }
+    }
+
+    function panCameraHorizontally(deltaX) {
+      followShipmentCamera = false;
+      updateFollowButtonUI();
+      const currentTarget = cameraLerpGoal ? cameraLerpGoal.target.clone() : controls.target.clone();
+      const currentPos = cameraLerpGoal ? cameraLerpGoal.pos.clone() : camera.position.clone();
+      currentTarget.x = THREE.MathUtils.clamp(currentTarget.x + deltaX, -115, 115);
+      currentPos.x = THREE.MathUtils.clamp(currentPos.x + deltaX, -140, 140);
+      cameraLerpGoal = { pos: currentPos, target: currentTarget };
+    }
+
+    function zoomCameraStep(factor) {
+      followShipmentCamera = false;
+      updateFollowButtonUI();
+      const dir = camera.position.clone().sub(controls.target);
+      dir.multiplyScalar(factor);
+      const len = dir.length();
+      if (len < controls.minDistance) dir.setLength(controls.minDistance);
+      if (len > controls.maxDistance) dir.setLength(controls.maxDistance);
+      cameraLerpGoal = {
+        pos: controls.target.clone().add(dir),
+        target: controls.target.clone()
+      };
+    }
+
+    /*************************************************************************
+     * 5. ARQUITECTURA 3D REALISTA (LABORATORIOS, FARMACIAS, HUBS Y HOSPITAL)
+     *************************************************************************/
+    function buildRealisticWorld3D() {
+      LABS_CONFIG.forEach((lab) => {
+        const labComplex = createRealisticLabComplex(lab);
+        scene.add(labComplex);
+
+        createFloatingLabel(
+          lab.key,
+          `🧪 ${lab.name}`,
+          `RUT: ${lab.rut} • Est:1 Prep ➔ Pickup FedEx`,
+          lab.pos.clone().add(new THREE.Vector3(0, 12.2, 0)),
+          'border-sky-400/60'
+        );
+      });
+
+      const originComplex = createRealisticLogisticsStation(NODE_POSITIONS.originStation, 0x4D148C, 0xFF6600, true);
+      scene.add(originComplex);
+      createFloatingLabel(
+        'ORIGIN',
+        '📦 Bodega Vespucio (FedEx Origin)',
+        'Etapa 3: Scan Origen ➔ Mov:2 En Tránsito',
+        NODE_POSITIONS.originStation.clone().add(new THREE.Vector3(0, 12.2, 0)),
+        'border-purple-400/60'
+      );
+
+      const superHubComplex = createRealisticSuperHub(NODE_POSITIONS.superHub);
+      scene.add(superHubComplex);
+      createFloatingLabel(
+        'HUB',
+        '❄️ FedEx SuperHub & Cámara Fría 2°C-8°C',
+        'Etapa 4: Sort Frío + GET IDs (Est:2 En Tránsito)',
+        NODE_POSITIONS.superHub.clone().add(new THREE.Vector3(0, 16.5, 0)),
+        'border-cyan-400/60'
+      );
+
+      const destComplex = createRealisticLogisticsStation(NODE_POSITIONS.destStation, 0x3b0764, 0xf59e0b, false);
+      scene.add(destComplex);
+      createFloatingLabel(
+        'DEST',
+        '🚚 Estación Destino Regional',
+        'Etapa 6: Salida Reparto ➔ PUT Anexo N°3 (Mov:2)',
+        NODE_POSITIONS.destStation.clone().add(new THREE.Vector3(0, 12.2, 0)),
+        'border-amber-400/60'
+      );
+
+      const hospitalComplex = createRealisticHospitalAndPharmacy(NODE_POSITIONS.hospital);
+      scene.add(hospitalComplex);
+      createFloatingLabel(
+        'HOSP',
+        '🏥 Hospital & Farmacia Clínica S.N.S.S.',
+        'Etapas 7-8: POD ➔ Mov:1 Conforme / Mov:3 Rechazado',
+        NODE_POSITIONS.hospital.clone().add(new THREE.Vector3(0, 17.5, 0)),
+        'border-emerald-400/70'
+      );
+
+      middlewareCoreGroup = new THREE.Group();
+      middlewareCoreGroup.position.copy(NODE_POSITIONS.middleware);
+
+      const mwPlatform = new THREE.Mesh(
+        new THREE.CylinderGeometry(6.2, 7.0, 0.8, 8),
+        new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8, roughness: 0.2 })
+      );
+      mwPlatform.position.y = -2.6;
+      middlewareCoreGroup.add(mwPlatform);
+
+      const mwHexCore = new THREE.Mesh(
+        new THREE.CylinderGeometry(4.2, 4.2, 4.4, 6),
+        new THREE.MeshStandardMaterial({
+          color: 0xf59e0b,
+          emissive: 0x78350f,
+          metalness: 0.75,
+          roughness: 0.18
+        })
+      );
+      middlewareCoreGroup.add(mwHexCore);
+
+      const mwWire = new THREE.Mesh(
+        new THREE.CylinderGeometry(4.7, 4.7, 4.7, 6),
+        new THREE.MeshBasicMaterial({ color: 0xff6600, wireframe: true })
+      );
+      middlewareCoreGroup.add(mwWire);
+
+      const inRing = new THREE.Mesh(
+        new THREE.TorusGeometry(6.6, 0.22, 16, 64),
+        new THREE.MeshBasicMaterial({ color: 0xff6600 })
+      );
+      inRing.rotation.x = Math.PI / 2.4;
+      middlewareCoreGroup.add(inRing);
+      middlewareRings.push(inRing);
+
+      const outRing = new THREE.Mesh(
+        new THREE.TorusGeometry(8.0, 0.18, 16, 64),
+        new THREE.MeshBasicMaterial({ color: 0x00e5ff })
+      );
+      outRing.rotation.y = Math.PI / 3;
+      middlewareCoreGroup.add(outRing);
+      middlewareRings.push(outRing);
+
+      scene.add(middlewareCoreGroup);
+      createFloatingLabel(
+        'MIDDLEWARE',
+        '⚡ MIDDLEWARE INTEGRADOR (Webhook ➔ API)',
+        'Mapeo FedEx ➔ DescMovimiento (1,2,3) y Estado (1..5)',
+        NODE_POSITIONS.middleware.clone().add(new THREE.Vector3(0, 12.5, 0)),
+        'border-amber-400 active-node'
+      );
+
+      cenabastCoreGroup = new THREE.Group();
+      cenabastCoreGroup.position.copy(NODE_POSITIONS.cenabastCloud);
+
+      const cenPlatform = new THREE.Mesh(
+        new THREE.CylinderGeometry(6.4, 7.2, 0.8, 12),
+        new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.8, roughness: 0.2 })
+      );
+      cenPlatform.position.y = -2.8;
+      cenabastCoreGroup.add(cenPlatform);
+
+      const cenSphere = new THREE.Mesh(
+        new THREE.OctahedronGeometry(4.8, 2),
+        new THREE.MeshStandardMaterial({
+          color: 0x00e5ff,
+          emissive: 0x0369a1,
+          metalness: 0.65,
+          roughness: 0.15,
+          wireframe: true
+        })
+      );
+      cenabastCoreGroup.add(cenSphere);
+
+      const cenInner = new THREE.Mesh(
+        new THREE.SphereGeometry(3.2, 24, 24),
+        new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.7 })
+      );
+      cenabastCoreGroup.add(cenInner);
+
+      const cRing1 = new THREE.Mesh(
+        new THREE.TorusGeometry(7.0, 0.2, 16, 64),
+        new THREE.MeshBasicMaterial({ color: 0x00e5ff })
+      );
+      cRing1.rotation.x = Math.PI / 2.1;
+      cenabastCoreGroup.add(cRing1);
+      cenabastRings.push(cRing1);
+
+      const cRing2 = new THREE.Mesh(
+        new THREE.TorusGeometry(8.5, 0.15, 16, 64),
+        new THREE.MeshBasicMaterial({ color: 0x10b981 })
+      );
+      cRing2.rotation.y = Math.PI / 2.5;
+      cenabastCoreGroup.add(cRing2);
+      cenabastRings.push(cRing2);
+
+      scene.add(cenabastCoreGroup);
+      createFloatingLabel(
+        'CLOUD',
+        '☁️ CENABAST API GATEWAY v1.6.0 + SAP',
+        'Endpoints: /distribucion • /movimiento • /tracking • /cedible',
+        NODE_POSITIONS.cenabastCloud.clone().add(new THREE.Vector3(0, 12.5, 0)),
+        'border-cyan-400'
+      );
+    }
+
+    function createRealisticLabComplex(lab) {
+      const group = new THREE.Group();
+      group.position.copy(lab.pos);
+
+      const pad = new THREE.Mesh(
+        new THREE.BoxGeometry(19, 0.35, 15.5),
+        new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 })
+      );
+      pad.position.y = 0.17;
+      group.add(pad);
+
+      const winTex = createWindowFacadeTexture(lab.accentHex, 3, 6);
+      const mainBuilding = new THREE.Mesh(
+        new THREE.BoxGeometry(11.5, 7.2, 10.5),
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          map: winTex,
+          metalness: 0.55,
+          roughness: 0.25
+        })
+      );
+      mainBuilding.position.set(-1.5, 3.6, 0);
+      group.add(mainBuilding);
+
+      const roofTrim = new THREE.Mesh(
+        new THREE.BoxGeometry(12.0, 0.45, 11.0),
+        new THREE.MeshBasicMaterial({ color: lab.color })
+      );
+      roofTrim.position.set(-1.5, 7.35, 0);
+      group.add(roofTrim);
+
+      const dockWing = new THREE.Mesh(
+        new THREE.BoxGeometry(5.5, 4.6, 9.2),
+        new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.4, roughness: 0.4 })
+      );
+      dockWing.position.set(5.2, 2.3, 0);
+      group.add(dockWing);
+
+      [-2.6, 0, 2.6].forEach((zOff) => {
+        const shutter = new THREE.Mesh(
+          new THREE.BoxGeometry(0.25, 3.0, 1.9),
+          new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.7, roughness: 0.3 })
+        );
+        shutter.position.set(8.0, 1.6, zOff);
+        group.add(shutter);
+
+        const bayLight = new THREE.Mesh(
+          new THREE.SphereGeometry(0.22, 8, 8),
+          new THREE.MeshBasicMaterial({ color: 0x10b981 })
+        );
+        bayLight.position.set(8.05, 3.5, zOff);
+        group.add(bayLight);
+      });
+
+      [-2.5, 1.8].forEach((zTank) => {
+        const tank = new THREE.Mesh(
+          new THREE.CylinderGeometry(1.15, 1.15, 6.8, 20),
+          new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.85, roughness: 0.15 })
+        );
+        tank.position.set(-8.2, 3.4, zTank);
+        group.add(tank);
+
+        const dome = new THREE.Mesh(
+          new THREE.SphereGeometry(1.15, 16, 12),
+          new THREE.MeshStandardMaterial({ color: lab.color, metalness: 0.6, roughness: 0.2 })
+        );
+        dome.position.set(-8.2, 6.8, zTank);
+        group.add(dome);
+      });
+
+      [-3.5, 0.5].forEach((xHvac) => {
+        const hvacBox = new THREE.Mesh(
+          new THREE.BoxGeometry(2.4, 1.1, 2.4),
+          new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.6 })
+        );
+        hvacBox.position.set(xHvac, 7.9, -2.2);
+        group.add(hvacBox);
+
+        const fan = new THREE.Mesh(
+          new THREE.BoxGeometry(1.8, 0.12, 0.35),
+          new THREE.MeshBasicMaterial({ color: lab.color })
+        );
+        fan.position.set(xHvac, 8.55, -2.2);
+        group.add(fan);
+        animatedProps.push({ mesh: fan, type: 'spinY', speed: 6.5 });
+      });
+
+      const crossGroup = create3DMedicalCross(lab.color, 1.8);
+      crossGroup.position.set(-1.5, 9.1, 4.8);
+      group.add(crossGroup);
+
+      return group;
+    }
+
+    function createRealisticLogisticsStation(pos, mainColorHex, accentHex, hasLaserPortal) {
+      const group = new THREE.Group();
+      group.position.copy(pos);
+
+      const pad = new THREE.Mesh(
+        new THREE.BoxGeometry(21, 0.3, 17),
+        new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.7 })
+      );
+      pad.position.y = 0.15;
+      group.add(pad);
+
+      const winTex = createWindowFacadeTexture('#a855f7', 2, 7);
+      const warehouse = new THREE.Mesh(
+        new THREE.BoxGeometry(16.5, 6.8, 13.5),
+        new THREE.MeshStandardMaterial({ color: mainColorHex, map: winTex, metalness: 0.45, roughness: 0.35 })
+      );
+      warehouse.position.y = 3.4;
+      group.add(warehouse);
+
+      const fascia = new THREE.Mesh(
+        new THREE.BoxGeometry(17.0, 0.65, 14.0),
+        new THREE.MeshBasicMaterial({ color: accentHex })
+      );
+      fascia.position.y = 6.95;
+      group.add(fascia);
+
+      if (hasLaserPortal) {
+        const archLeft = new THREE.Mesh(new THREE.BoxGeometry(0.6, 5.2, 0.6), new THREE.MeshStandardMaterial({ color: 0xf8fafc }));
+        archLeft.position.set(9.2, 2.6, -2.6);
+        const archRight = archLeft.clone();
+        archRight.position.set(9.2, 2.6, 2.6);
+        const archTop = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 5.8), new THREE.MeshBasicMaterial({ color: 0xff6600 }));
+        archTop.position.set(9.2, 5.2, 0);
+        group.add(archLeft, archRight, archTop);
+
+        const laserSheet = new THREE.Mesh(
+          new THREE.PlaneGeometry(5.0, 4.6),
+          new THREE.MeshBasicMaterial({ color: 0x00e5ff, side: THREE.DoubleSide, transparent: true, opacity: 0.28 })
+        );
+        laserSheet.rotation.y = Math.PI / 2;
+        laserSheet.position.set(9.2, 2.5, 0);
+        group.add(laserSheet);
+        animatedProps.push({ mesh: laserSheet, type: 'pulseOpacity', speed: 4.0 });
+      }
+
+      return group;
+    }
+
+    function createRealisticSuperHub(pos) {
+      const group = new THREE.Group();
+      group.position.copy(pos);
+
+      const apron = new THREE.Mesh(
+        new THREE.BoxGeometry(28, 0.35, 22),
+        new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.6 })
+      );
+      apron.position.y = 0.17;
+      group.add(apron);
+
+      [-7.5, 7.5].forEach((xWing) => {
+        const wing = new THREE.Mesh(
+          new THREE.BoxGeometry(7.2, 7.5, 16.5),
+          new THREE.MeshStandardMaterial({ color: 0x3b0764, metalness: 0.5, roughness: 0.3 })
+        );
+        wing.position.set(xWing, 3.75, 0);
+        group.add(wing);
+
+        const wingTrim = new THREE.Mesh(
+          new THREE.BoxGeometry(7.5, 0.5, 16.8),
+          new THREE.MeshBasicMaterial({ color: 0xff6600 })
+        );
+        wingTrim.position.set(xWing, 7.65, 0);
+        group.add(wingTrim);
+      });
+
+      const coldVault = new THREE.Mesh(
+        new THREE.BoxGeometry(9.2, 9.2, 15.5),
+        new THREE.MeshPhysicalMaterial({
+          color: 0x00e5ff,
+          transparent: true,
+          opacity: 0.38,
+          roughness: 0.1,
+          metalness: 0.2
+        })
+      );
+      coldVault.position.set(0, 4.6, 0);
+      group.add(coldVault);
+
+      const sorterRing = new THREE.Mesh(
+        new THREE.TorusGeometry(3.2, 0.35, 12, 36),
+        new THREE.MeshBasicMaterial({ color: 0x38bdf8, wireframe: true })
+      );
+      sorterRing.rotation.x = Math.PI / 2;
+      sorterRing.position.set(0, 2.6, 0);
+      group.add(sorterRing);
+      animatedProps.push({ mesh: sorterRing, type: 'spinZ', speed: 2.2 });
+
+      const towerStem = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.3, 1.7, 13.5, 12),
+        new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.6 })
+      );
+      towerStem.position.set(0, 6.75, -6.2);
+      group.add(towerStem);
+
+      const towerCab = new THREE.Mesh(
+        new THREE.CylinderGeometry(2.6, 2.0, 2.2, 12),
+        new THREE.MeshBasicMaterial({ color: 0x00e5ff, wireframe: true })
+      );
+      towerCab.position.set(0, 13.8, -6.2);
+      group.add(towerCab);
+
+      const radarDish = new THREE.Mesh(
+        new THREE.BoxGeometry(3.2, 0.35, 0.6),
+        new THREE.MeshBasicMaterial({ color: 0xff6600 })
+      );
+      radarDish.position.set(0, 15.3, -6.2);
+      group.add(radarDish);
+      animatedProps.push({ mesh: radarDish, type: 'spinY', speed: 3.2 });
+
+      return group;
+    }
+
+    function createRealisticHospitalAndPharmacy(pos) {
+      const group = new THREE.Group();
+      group.position.copy(pos);
+
+      const basePad = new THREE.Mesh(
+        new THREE.BoxGeometry(24, 0.35, 20),
+        new THREE.MeshStandardMaterial({ color: 0x064e3b, roughness: 0.6 })
+      );
+      basePad.position.y = 0.17;
+      group.add(basePad);
+
+      const hospWinTex = createWindowFacadeTexture('#34d399', 6, 8);
+      const mainTower = new THREE.Mesh(
+        new THREE.BoxGeometry(12.5, 13.5, 11.5),
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          map: hospWinTex,
+          metalness: 0.5,
+          roughness: 0.25
+        })
+      );
+      mainTower.position.set(2.2, 6.75, -1.5);
+      group.add(mainTower);
+
+      const helipadMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(3.8, 3.8, 0.25, 32),
+        new THREE.MeshBasicMaterial({ map: createHelipadTexture() })
+      );
+      helipadMesh.position.set(2.2, 13.65, -1.5);
+      group.add(helipadMesh);
+
+      const pharmWinTex = createWindowFacadeTexture('#00e5ff', 2, 5);
+      const pharmacyWing = new THREE.Mesh(
+        new THREE.BoxGeometry(10.5, 6.2, 9.5),
+        new THREE.MeshStandardMaterial({
+          color: 0x0f172a,
+          map: pharmWinTex,
+          metalness: 0.55,
+          roughness: 0.3
+        })
+      );
+      pharmacyWing.position.set(-4.5, 3.1, 3.2);
+      group.add(pharmacyWing);
+
+      const pharmacyRoof = new THREE.Mesh(
+        new THREE.BoxGeometry(10.9, 0.45, 9.9),
+        new THREE.MeshBasicMaterial({ color: 0x10b981 })
+      );
+      pharmacyRoof.position.set(-4.5, 6.35, 3.2);
+      group.add(pharmacyRoof);
+
+      const canopy = new THREE.Mesh(
+        new THREE.BoxGeometry(4.2, 0.35, 6.5),
+        new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.75 })
+      );
+      canopy.position.set(-10.2, 3.8, 3.2);
+      group.add(canopy);
+
+      const hospCross = create3DMedicalCross(0xf43f5e, 2.3);
+      hospCross.position.set(2.2, 15.2, 4.2);
+      group.add(hospCross);
+
+      const pharmCross = create3DMedicalCross(0x10b981, 1.7);
+      pharmCross.position.set(-4.5, 7.8, 7.8);
+      group.add(pharmCross);
+      animatedProps.push({ mesh: pharmCross, type: 'spinY', speed: 1.5 });
+
+      return group;
+    }
+
+    function create3DMedicalCross(colorHex, size = 2.0) {
+      const cross = new THREE.Group();
+      const mat = new THREE.MeshBasicMaterial({ color: colorHex });
+      const vBar = new THREE.Mesh(new THREE.BoxGeometry(size * 0.34, size, size * 0.25), mat);
+      const hBar = new THREE.Mesh(new THREE.BoxGeometry(size, size * 0.34, size * 0.25), mat);
+      cross.add(vBar, hBar);
+      return cross;
+    }
+
+    function createRealisticShipmentVehicle(transportMode) {
+      const group = new THREE.Group();
+
+      const truckGroup = new THREE.Group();
+      truckGroup.name = 'truckMesh';
+
+      const trailer = new THREE.Mesh(
+        new THREE.BoxGeometry(3.8, 2.25, 2.15),
+        new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.25, metalness: 0.15 })
+      );
+      trailer.position.set(-0.6, 1.45, 0);
+      truckGroup.add(trailer);
+
+      const stripe = new THREE.Mesh(
+        new THREE.BoxGeometry(3.84, 0.55, 2.2),
+        new THREE.MeshBasicMaterial({ color: transportMode === 'air' ? 0xFF6600 : 0x4D148C })
+      );
+      stripe.position.set(-0.6, 1.55, 0);
+      truckGroup.add(stripe);
+
+      const cooler = new THREE.Mesh(
+        new THREE.BoxGeometry(0.45, 1.1, 1.4),
+        new THREE.MeshBasicMaterial({ color: 0x00e5ff })
+      );
+      cooler.position.set(1.4, 1.9, 0);
+      truckGroup.add(cooler);
+
+      const cab = new THREE.Mesh(
+        new THREE.BoxGeometry(1.45, 1.75, 2.0),
+        new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.3 })
+      );
+      cab.position.set(2.1, 1.2, 0);
+      truckGroup.add(cab);
+
+      const windshield = new THREE.Mesh(
+        new THREE.BoxGeometry(0.15, 0.75, 1.75),
+        new THREE.MeshBasicMaterial({ color: 0x0f172a })
+      );
+      windshield.position.set(2.8, 1.5, 0);
+      truckGroup.add(windshield);
+
+      const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.32, 14);
+      const wheelMat = new THREE.MeshBasicMaterial({ color: 0x0f172a });
+      [-1.8, -0.2, 2.1].forEach((wx) => {
+        [-1.05, 1.05].forEach((wz) => {
+          const w = new THREE.Mesh(wheelGeo, wheelMat);
+          w.rotation.x = Math.PI / 2;
+          w.position.set(wx, 0.42, wz);
+          truckGroup.add(w);
+        });
+      });
+
+      group.add(truckGroup);
+
+      const planeGroup = new THREE.Group();
+      planeGroup.name = 'planeMesh';
+      planeGroup.visible = false;
+
+      const fuselage = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.85, 0.85, 6.2, 16),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 })
+      );
+      fuselage.rotation.z = Math.PI / 2;
+      fuselage.position.y = 1.5;
+      planeGroup.add(fuselage);
+
+      const nose = new THREE.Mesh(
+        new THREE.ConeGeometry(0.85, 1.6, 16),
+        new THREE.MeshStandardMaterial({ color: 0x4D148C })
+      );
+      nose.rotation.z = -Math.PI / 2;
+      nose.position.set(3.9, 1.5, 0);
+      planeGroup.add(nose);
+
+      const wings = new THREE.Mesh(
+        new THREE.BoxGeometry(1.8, 0.16, 7.6),
+        new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.4 })
+      );
+      wings.position.set(0.3, 1.4, 0);
+      planeGroup.add(wings);
+
+      const tailFin = new THREE.Mesh(
+        new THREE.BoxGeometry(1.3, 2.1, 0.22),
+        new THREE.MeshBasicMaterial({ color: 0xFF6600 })
+      );
+      tailFin.position.set(-2.5, 2.6, 0);
+      planeGroup.add(tailFin);
+
+      group.add(planeGroup);
+      return group;
+    }
+
+    /*************************************************************************
+     * 6. AUTOPISTAS LOGÍSTICAS Y ARQUITECTURA DE FIBRA ÓPTICA EN 2 SALTOS
+     *************************************************************************/
+    function buildRoadsAndFiberNetwork3D() {
+      LABS_CONFIG.forEach((lab) => {
+        drawCurveLine(
+          lab.pos.clone().add(new THREE.Vector3(8, 0.3, 0)),
+          new THREE.Vector3(-72, 0.3, lab.pos.z * 0.45),
+          NODE_POSITIONS.originStation.clone().add(new THREE.Vector3(-8, 0.3, 0)),
+          0x475569
+        );
+      });
+
+      drawCurveLine(
+        NODE_POSITIONS.originStation.clone().add(new THREE.Vector3(8, 0.3, 0)),
+        new THREE.Vector3(-24, 0.3, 2),
+        NODE_POSITIONS.superHub.clone().add(new THREE.Vector3(-11, 0.3, 0)),
+        0x64748b
+      );
+
+      drawCurveLine(
+        NODE_POSITIONS.superHub.clone().add(new THREE.Vector3(0, 9, 0)),
+        new THREE.Vector3(24, 24, -4),
+        NODE_POSITIONS.destStation.clone().add(new THREE.Vector3(0, 6, 0)),
+        0xff6600,
+        true
+      );
+      drawCurveLine(
+        NODE_POSITIONS.superHub.clone().add(new THREE.Vector3(11, 0.3, 0)),
+        new THREE.Vector3(24, 0.3, 9),
+        NODE_POSITIONS.destStation.clone().add(new THREE.Vector3(-8, 0.3, 0)),
+        0x38bdf8
+      );
+
+      drawCurveLine(
+        NODE_POSITIONS.destStation.clone().add(new THREE.Vector3(8, 0.3, 0)),
+        new THREE.Vector3(72, 0.3, 2),
+        NODE_POSITIONS.hospital.clone().add(new THREE.Vector3(-10, 0.3, 0)),
+        0x10b981
+      );
+
+      const groundNodes = [
+        ...LABS_CONFIG.map(l => l.pos),
+        NODE_POSITIONS.originStation,
+        NODE_POSITIONS.superHub,
+        NODE_POSITIONS.destStation,
+        NODE_POSITIONS.hospital
+      ];
+      groundNodes.forEach((gPos) => {
+        const mid = gPos.clone().lerp(NODE_POSITIONS.middleware, 0.5);
+        mid.y += 9;
+        drawCurveLine(
+          gPos.clone().add(new THREE.Vector3(0, 6, 0)),
+          mid,
+          NODE_POSITIONS.middleware.clone(),
+          0xf59e0b,
+          true
+        );
+      });
+
+      drawCurveLine(
+        NODE_POSITIONS.middleware.clone(),
+        new THREE.Vector3(2, 32, -18),
+        NODE_POSITIONS.cenabastCloud.clone(),
+        0x00e5ff,
+        false
+      );
+      drawCurveLine(
+        NODE_POSITIONS.cenabastCloud.clone(),
+        new THREE.Vector3(2, 20, -18),
+        NODE_POSITIONS.middleware.clone(),
+        0x10b981,
+        true
+      );
+    }
+
+    function drawCurveLine(p0, p1, p2, colorHex, dashed = false) {
+      const curve = new THREE.QuadraticBezierCurve3(p0, p1, p2);
+      const pts = curve.getPoints(48);
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      const mat = dashed
+        ? new THREE.LineDashedMaterial({ color: colorHex, dashSize: 1.6, gapSize: 1.0, transparent: true, opacity: 0.6 })
+        : new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.72 });
+      const line = new THREE.Line(geo, mat);
+      if (dashed) line.computeLineDistances();
+      scene.add(line);
+    }
+
+    function createFloatingLabel(modKey, title, subtitle, worldPos, borderClass) {
+      const layer = document.getElementById('labels-layer');
+      const div = document.createElement('div');
+      div.className = `node-label glass px-2.5 py-1 rounded-xl border ${borderClass} text-left`;
+      div.dataset.modKey = modKey;
+      div.innerHTML = `
+        <div class="text-[11px] font-extrabold text-white whitespace-nowrap">${title}</div>
+        <div class="text-[9px] mono text-slate-300 whitespace-nowrap">${subtitle}</div>
+      `;
+      div.addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectModule(modKey, true);
+      });
+      layer.appendChild(div);
+      htmlLabels.push({ el: div, pos: worldPos, modKey });
+    }
+
+    /*************************************************************************
+     * 7. FORMATOS OFICIALES CENABAST v1.6.0 & MAPEO QUIRÚRGICO DE ESTADOS
+     *************************************************************************/
+    function getFormattedDateTime() {
+      const now = new Date();
+      const dd = String(now.getDate()).padStart(2, '0');
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const yyyy = now.getFullYear();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mi = String(now.getMinutes()).padStart(2, '0');
+      const ss = String(now.getSeconds()).padStart(2, '0');
+      return {
+        dateCEN: `${dd}-${mm}-${yyyy}`,
+        timeCEN: `${hh}:${mi}:${ss}`,
+        iso: now.toISOString()
+      };
+    }
+
+    function generateHmacSignature(tracking, eventType) {
+      const raw = `${tracking}:${eventType}:FEDEX_SECRET_2026`;
+      let hash = 0;
+      for (let i = 0; i < raw.length; i++) {
+        hash = ((hash << 5) - hash) + raw.charCodeAt(i);
+        hash |= 0;
+      }
+      return 'sha256=' + Math.abs(hash).toString(16).padStart(12, 'a') + '9f8e7d6c5b4a';
+    }
+
+    /**
+     * Actualiza la etiqueta flotante sobre el camión/avión mostrando el evento actual,
+     * el estado CENABAST mapeado (Est / Mov) y si está en ruta o detenido.
+     */
+    function refreshShipmentMapTag(ship) {
+      if (!ship || !ship.tagEl) return;
+      const pauseChip = isPaused
+        ? `<span class="px-1 rounded bg-amber-500 text-slate-950 font-extrabold">⏸ DETENIDO</span>`
+        : '';
+      const stateColor = ship.distribucionEstado === 3
+        ? 'bg-emerald-500/30 text-emerald-200 border-emerald-400/60'
+        : (ship.distribucionEstado === 4 || ship.distribucionEstado === 5)
+          ? 'bg-rose-500/30 text-rose-200 border-rose-400/60'
+          : ship.distribucionEstado === 1
+            ? 'bg-sky-500/30 text-sky-200 border-sky-400/60'
+            : 'bg-cyan-500/30 text-cyan-200 border-cyan-400/60';
+
+      ship.tagEl.innerHTML = `
+        ${pauseChip}
+        <span class="font-extrabold text-white">#${ship.docCenabast}</span>
+        <span class="text-amber-300 font-bold">${ship.currentEventTitle || 'GUÍA CREADA'}</span>
+        <span class="px-1 py-0.2 rounded border ${stateColor} font-bold">${ship.cenabastStateBadge || 'Est:1 Prep | Mov:2'}</span>
+        <span class="text-orange-400">G:${ship.trackingCode}</span>
+      `;
+    }
+
+    /**
+     * Crea un nuevo despacho con Guía FedEx de 13 dígitos comenzando en 8
+     */
+    function spawnShipment(customOpts = {}) {
+      const labIdx = customOpts.labIdx ?? parseInt(document.getElementById('sel-lab').value, 10);
+      const docRule = customOpts.docRule ?? document.getElementById('sel-doc-rule').value;
+      const transport = customOpts.transport ?? document.getElementById('sel-transport').value;
+      const finalOutcome = customOpts.finalOutcome ?? parseInt(document.getElementById('sel-outcome').value, 10);
+
+      const lab = LABS_CONFIG[labIdx];
+      const dt = getFormattedDateTime();
+
+      const docCenabast = ++docCounter;
+      const guiaNum = ++guiaCounter;
+      const facNum = ++facturaCounter;
+      const trackingCode = `${guiaNum}`;
+
+      const isGuiaMode = docRule === 'guia';
+      const facturaVal = isGuiaMode ? 0 : facNum;
+      const fechaFacVal = isGuiaMode ? "" : dt.dateCEN;
+      const guiaVal = isGuiaMode ? guiaNum : 0;
+      const fechaGuiVal = isGuiaMode ? dt.dateCEN : "";
+
+      const meshGroup = createRealisticShipmentVehicle(transport);
+      meshGroup.position.copy(lab.pos);
+      scene.add(meshGroup);
+
+      const tagEl = document.createElement('div');
+      tagEl.className = 'ship-tag glass px-2 py-0.5 rounded-md border border-orange-400/75 text-[9px] mono text-white whitespace-nowrap';
+      document.getElementById('labels-layer').appendChild(tagEl);
+
+      const ship = {
+        docCenabast,
+        guiaNum,
+        trackingCode,
+        lab,
+        docRule,
+        transport,
+        finalOutcome,
+        idDistribucion: ++idDistCounter,
+        idDistribucionDetalle: ++idDetCounter,
+        idDistribucionMovimiento: ++idMovCounter,
+        factura: facturaVal,
+        fechaFac: fechaFacVal,
+        guia: guiaVal,
+        fechaGui: fechaGuiVal,
+        oTrans: `FX-${trackingCode}`,
+        stage: 1,
+        progress: 0,
+        mesh: meshGroup,
+        tagEl,
+        lat: '-33.5100',
+        lon: '-70.7500',
+        locacion: `Bodega Expedición ${lab.name}`,
+        distribucionEstado: 1,
+        descMovimiento: 2,
+        currentEventTitle: 'GUÍA CREADA',
+        cenabastStateBadge: 'Est:1 Prep | Mov:2 Tránsito',
+        recibidoPor: 'DESPACHADO DESDE LABORATORIO',
+        cedibleSent: false,
+        cedibleBase64: `JVBERi0xLjQKJcTl8uXrp/CEDIBLE_DOC_${docCenabast}_GUIA_${trackingCode}_RUT_${lab.rut}_SNSS==`,
+        lastWebhookPayload: null,
+        lastMiddlewareSteps: [],
+        lastCenabastEndpoint: '',
+        lastCenabastMethod: 'POST',
+        lastCenabastPayload: null,
+        trackingHistory: []
+      };
+
+      refreshShipmentMapTag(ship);
+
+      tagEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectShipment(ship, true);
+      });
+
+      shipments.unshift(ship);
+      selectShipment(ship, false);
+
+      triggerStageIntegration(ship, 1);
+      renderShipmentsList();
+      updateKPIs();
+    }
+
+    /**
+     * Ejecuta la lógica exacta de Webhook FedEx -> Middleware Integrador -> API CENABAST v1.6.0
+     * Incorporando nombres de eventos operativos y estados CENABAST explícitos para las etiquetas.
+     */
+    function triggerStageIntegration(ship, stageNum) {
+      const dt = getFormattedDateTime();
+      let webhookEvent = '';
+      let eventActionTitle = ''; // Nombre práctico del evento (Ej: PICKUP / RETIRO LAB)
+      let cenStateTag = '';      // Estado oficial CENABAST (Ej: Est:2 En Tránsito | Mov:2 En Tránsito)
+      let cenEndpoint = '';
+      let cenMethod = 'POST';
+      let mwSteps = [];
+      let cenPayload = {};
+      let shortEndpoint = '';
+
+      if (stageNum === 1) {
+        webhookEvent = 'FEDEX.SHIP.LABEL_CREATED';
+        eventActionTitle = 'GUÍA EMITIDA';
+        cenStateTag = 'Est:1 En Prep. | Mov:2 En Tránsito';
+        cenEndpoint = '/WebApi/api/v1/proveedor/distribucion';
+        cenMethod = 'POST';
+        shortEndpoint = '/distribucion';
+        ship.locacion = `Planta ${ship.lab.name}`;
+        ship.distribucionEstado = 1; // 1: En preparación
+        ship.descMovimiento = 2;     // 2: En tránsito
+
+        cenPayload = {
+          Rut_Proveedor: ship.lab.rut,
+          Doc_Cenabast: ship.docCenabast,
+          Factura: ship.factura,
+          Fecha_Fac: ship.fechaFac,
+          Guia: ship.guia,
+          Fecha_Gui: ship.fechaGui,
+          O_Trans: ship.oTrans,
+          Detalles: [
+            {
+              Doc_Cenabast: ship.docCenabast,
+              Articulo: ship.lab.articulo,
+              Lote: ship.lab.lote,
+              FechaVencimiento: ship.lab.vencimiento,
+              Cantidad: ship.lab.cantidad
+            }
+          ],
+          Movimientos: [
+            {
+              Doc_Cenabast: ship.docCenabast,
+              Fecha: dt.dateCEN,
+              Hora: dt.timeCEN,
+              DescMovimiento: 2,
+              RecibidoPor: "DESPACHADO - EN TRANSITO",
+              URL: `https://www.fedex.com/fedextrack/?trknbr=${ship.trackingCode}`
+            }
+          ]
+        };
+
+        mwSteps = [
+          `1. [EVENTO FEDEX] ${eventActionTitle} (Guía 13 díg: ${ship.trackingCode})`,
+          `2. [MAPEO CENABAST] DistribucionEstado=1 (En preparación) | DescMovimiento=2 (En tránsito)`,
+          `3. [REGLA 7.1] Condicional validado: Factura=${ship.factura}, Guia=${ship.guia}`,
+          `4. [REST POST] POST /api/v1/proveedor/distribucion enviado a CENABAST`
+        ];
+        recordModulePass(ship.lab.key, ship, `${eventActionTitle} ➔ ${cenStateTag}`);
+      }
+      else if (stageNum === 2) {
+        webhookEvent = 'SHIPMENT.PICKED_UP';
+        eventActionTitle = 'PICKUP / RETIRO LAB';
+        cenStateTag = 'Est:2 En Tránsito (Retiro FedEx)';
+        cenEndpoint = '/api/v1/distribucion/tracking';
+        cenMethod = 'POST';
+        shortEndpoint = '/tracking';
+        ship.locacion = `Retiro First-Mile FedEx (${ship.lab.name})`;
+        ship.distribucionEstado = 2; // 2: En tránsito
+        ship.descMovimiento = 2;
+        ship.lat = '-33.4850';
+        ship.lon = '-70.7210';
+
+        cenPayload = buildTrackingPayload(ship, dt);
+        mwSteps = [
+          `1. [WEBHOOK FEDEX] SHIPMENT.PICKED_UP (${eventActionTitle}) Guía ${ship.trackingCode}`,
+          `2. [MAPEO CENABAST] Pickup FedEx traducido a DistribucionEstado = 2 (En tránsito)`,
+          `3. [CRUCE IDENTIDAD] Guía ${ship.trackingCode} ➔ Doc_Cenabast #${ship.docCenabast}`,
+          `4. [REST POST] POST /api/v1/distribucion/tracking (Locacion: "${ship.locacion}")`
+        ];
+      }
+      else if (stageNum === 3) {
+        webhookEvent = 'SHIPMENT.ORIGIN_STATION_SCAN';
+        eventActionTitle = 'SCAN BODEGA ORIGEN';
+        cenStateTag = 'Mov:2 En Tránsito (Bodega Vespucio)';
+        cenEndpoint = `/WebApi/api/v1/proveedor/distribucion/${ship.docCenabast}/movimiento`;
+        cenMethod = 'POST';
+        shortEndpoint = '/movimiento';
+        ship.locacion = 'En Bodega central Américo Vespucio';
+        ship.distribucionEstado = 2;
+        ship.descMovimiento = 2;
+        ship.lat = '-33.3942';
+        ship.lon = '-70.7381';
+
+        cenPayload = {
+          IdDistribucionMovimiento: ++idMovCounter,
+          Doc_Cenabast: ship.docCenabast,
+          Fecha: dt.dateCEN,
+          Hora: dt.timeCEN,
+          DescMovimiento: 2,
+          RecibidoPor: 'EN TRANSITO - BODEGA CENTRAL AMERICO VESPUCIO',
+          URL: `https://www.fedex.com/fedextrack/?trknbr=${ship.trackingCode}`
+        };
+
+        mwSteps = [
+          `1. [WEBHOOK FEDEX] ${eventActionTitle} en Bodega Central Américo Vespucio`,
+          `2. [MAPEO CENABAST] Asignado código DescMovimiento = 2 (En tránsito)`,
+          `3. [FORMATO 7.1] Fecha=${dt.dateCEN} | Hora=${dt.timeCEN}`,
+          `4. [REST POST] POST /proveedor/distribucion/${ship.docCenabast}/movimiento`
+        ];
+        recordModulePass('ORIGIN', ship, `${eventActionTitle} ➔ ${cenStateTag}`);
+      }
+      else if (stageNum === 4) {
+        webhookEvent = 'SHIPMENT.SUPERHUB_SORT_COLDCHAIN';
+        eventActionTitle = 'HUB FRÍO 2°C-8°C';
+        cenStateTag = 'Est:2 En Tránsito (Consulta IDs)';
+        cenEndpoint = `/WebApi/api/v1/Public/distribucion/${ship.docCenabast}`;
+        cenMethod = 'GET';
+        shortEndpoint = '/Public/distribucion';
+        ship.locacion = `FedEx SuperHub Cámara Fría (${ship.lab.temp})`;
+        ship.distribucionEstado = 2;
+        ship.descMovimiento = 2;
+        ship.lat = '-33.3890';
+        ship.lon = '-70.7850';
+
+        cenPayload = {
+          IdDistribucion: ship.idDistribucion,
+          Rut_Proveedor: ship.lab.rut,
+          Doc_Cenabast: ship.docCenabast,
+          Factura: ship.factura,
+          Guia: ship.guia,
+          Detalles: [{ IdDistribucionDetalle: ship.idDistribucionDetalle, Articulo: ship.lab.articulo, Lote: ship.lab.lote, Cantidad: ship.lab.cantidad }],
+          Movimientos: [{ IdDistribucionMovimiento: ship.idDistribucionMovimiento, DescMovimiento: 2, RecibidoPor: 'EN TRANSITO' }]
+        };
+
+        mwSteps = [
+          `1. [WEBHOOK FEDEX] ${eventActionTitle} (Cadena de frío ${ship.lab.temp} OK)`,
+          `2. [ANEXO N°3 PASO 2] GET /api/v1/Public/distribucion/${ship.docCenabast}`,
+          `3. [IDs RECUPERADOS] IdDistribucion=${ship.idDistribucion}, IdMov=${ship.idDistribucionMovimiento}`,
+          `4. [ESTADO CENABAST] Mantiene DescMovimiento=2 / DistribucionEstado=2 (En tránsito)`
+        ];
+        recordModulePass('HUB', ship, `${eventActionTitle} ➔ ${cenStateTag}`);
+      }
+      else if (stageNum === 5) {
+        webhookEvent = ship.transport === 'air' ? 'SHIPMENT.AIR_TRUNK_IN_TRANSIT' : 'SHIPMENT.GROUND_TRUNK_IN_TRANSIT';
+        eventActionTitle = ship.transport === 'air' ? 'TRÁNSITO AÉREO GPS' : 'TRÁNSITO TERRESTRE GPS';
+        cenStateTag = 'Est:2 En Tránsito (Ruta Troncal)';
+        cenEndpoint = '/api/v1/distribucion/tracking';
+        cenMethod = 'POST';
+        shortEndpoint = '/tracking';
+        ship.locacion = ship.transport === 'air' ? 'Vuelo FedEx Priority Overnight en Ruta' : 'Ruta Troncal Terrestre Refrigerada FedEx';
+        ship.distribucionEstado = 2;
+        ship.descMovimiento = 2;
+        ship.lat = '-33.4215';
+        ship.lon = '-70.6820';
+
+        cenPayload = buildTrackingPayload(ship, dt);
+        mwSteps = [
+          `1. [WEBHOOK GPS] ${eventActionTitle} (${ship.lat}, ${ship.lon})`,
+          `2. [MAPEO CENABAST] DistribucionEstado = 2 (En tránsito consecutivo Sec. 7.3.4)`,
+          `3. [REST POST] POST /api/v1/distribucion/tracking con georreferencia`
+        ];
+      }
+      else if (stageNum === 6) {
+        webhookEvent = 'SHIPMENT.OUT_FOR_DELIVERY';
+        eventActionTitle = 'SALIDA A REPARTO';
+        cenStateTag = 'Mov:2 En Tránsito (PUT Factura Anexo3)';
+        cenEndpoint = `/WebApi/api/v1/proveedor/distribucion/${ship.docCenabast}`;
+        cenMethod = 'PUT';
+        shortEndpoint = '/distribucion';
+        ship.locacion = 'Estación Destino Regional - En Reparto Última Milla';
+        ship.distribucionEstado = 2;
+        ship.descMovimiento = 2;
+        ship.lat = '-33.4420';
+        ship.lon = '-70.6510';
+
+        if (ship.factura === 0) {
+          ship.factura = ++facturaCounter;
+          ship.fechaFac = dt.dateCEN;
+        }
+
+        cenPayload = {
+          IdDistribucion: ship.idDistribucion,
+          Rut_Proveedor: ship.lab.rut,
+          Doc_Cenabast: ship.docCenabast,
+          Factura: ship.factura,
+          Fecha_Fac: `${ship.fechaFac} 0:00:00`,
+          Guia: ship.guia,
+          Fecha_Gui: ship.fechaGui ? `${ship.fechaGui} 0:00:00` : "01-01-1900 0:00:00",
+          O_Trans: ship.oTrans,
+          Detalles: [
+            {
+              IdDistribucionDetalle: ship.idDistribucionDetalle,
+              Doc_Cenabast: ship.docCenabast,
+              Articulo: ship.lab.articulo,
+              Lote: ship.lab.lote,
+              Cantidad: ship.lab.cantidad
+            }
+          ],
+          Movimientos: [
+            {
+              IdDistribucionMovimiento: ship.idDistribucionMovimiento,
+              Doc_Cenabast: ship.docCenabast,
+              Fecha: `${dt.dateCEN} 0:00:00`,
+              Hora: dt.timeCEN,
+              DescMovimiento: 2,
+              RecibidoPor: 'EN TRANSITO - REPARTO ULTIMA MILLA FEDEX',
+              URL: `https://www.fedex.com/fedextrack/?trknbr=${ship.trackingCode}`
+            }
+          ]
+        };
+
+        mwSteps = [
+          `1. [WEBHOOK FEDEX] ${eventActionTitle} (Out for Delivery) Guía ${ship.trackingCode}`,
+          `2. [ANEXO N°3 PUT] Actualiza Factura #${ship.factura} manteniendo DescMovimiento=2 (En tránsito)`,
+          `3. [IDs INCLUIDOS] IdDistribucion=${ship.idDistribucion}, IdDetalle=${ship.idDistribucionDetalle}`,
+          `4. [REST PUT] PUT /api/v1/proveedor/distribucion/${ship.docCenabast}`
+        ];
+        recordModulePass('DEST', ship, `${eventActionTitle} ➔ ${cenStateTag}`);
+      }
+      else if (stageNum === 7) {
+        if (ship.finalOutcome === 5) {
+          // Caso especial: Estado 5 Anulado en Tracking CENABAST
+          webhookEvent = 'SHIPMENT.CANCELLED_VOID';
+          eventActionTitle = 'ENVÍO ANULADO';
+          cenStateTag = 'Est:5 Anulado (Estado Final)';
+          cenEndpoint = '/api/v1/distribucion/tracking';
+          cenMethod = 'POST';
+          shortEndpoint = '/tracking';
+          ship.locacion = 'Anulado por Proveedor / Excepción Operativa';
+          ship.distribucionEstado = 5; // 5: Anulado
+          ship.descMovimiento = 3;
+          cenPayload = buildTrackingPayload(ship, dt);
+          mwSteps = [
+            `1. [WEBHOOK FEDEX] ${eventActionTitle} (Guía ${ship.trackingCode})`,
+            `2. [MAPEO CENABAST] Mapeado a DistribucionEstado = 5 (Anulado - Estado Final Sec. 7.3.4)`,
+            `3. [REST POST] POST /api/v1/distribucion/tracking`
+          ];
+        } else {
+          const isOk = ship.finalOutcome === 1;
+          webhookEvent = isOk ? 'SHIPMENT.DELIVERED_POD' : 'SHIPMENT.DELIVERY_REJECTED';
+          eventActionTitle = isOk ? 'ENTREGA POD HOSPITAL' : 'RECHAZO EN HOSPITAL';
+          cenStateTag = isOk
+            ? 'Mov:1 Entrega Conforme | Est:3 Entregado'
+            : 'Mov:3 Rechazado | Est:4 Rechazado';
+          cenEndpoint = `/WebApi/api/v1/proveedor/distribucion/${ship.docCenabast}/movimiento`;
+          cenMethod = 'POST';
+          shortEndpoint = '/movimiento';
+          ship.locacion = 'Hospital S.N.S.S. - Bodega Farmacia Clínica';
+          ship.lat = '-33.4489';
+          ship.lon = '-70.6390';
+          ship.descMovimiento = isOk ? 1 : 3;
+          ship.distribucionEstado = isOk ? 3 : 4; // 3: Entregado, 4: Rechazado
+          ship.recibidoPor = isOk ? 'DRA. CARMEN SOTO - RECEPCION CONFORME' : 'RECHAZADO EN CONTROL DE CALIDAD';
+
+          cenPayload = {
+            IdDistribucionMovimiento: ++idMovCounter,
+            Doc_Cenabast: ship.docCenabast,
+            Fecha: dt.dateCEN,
+            Hora: dt.timeCEN,
+            DescMovimiento: ship.descMovimiento,
+            RecibidoPor: ship.recibidoPor,
+            URL: `https://www.fedex.com/fedextrack/?trknbr=${ship.trackingCode}`
+          };
+
+          mwSteps = [
+            `1. [WEBHOOK POD] ${eventActionTitle} (Guía ${ship.trackingCode})`,
+            `2. [MAPEO CENABAST] DescMovimiento=${ship.descMovimiento} (${isOk ? 'Entrega conforme' : 'Rechazado'}) | DistribucionEstado=${ship.distribucionEstado}`,
+            `3. [REGLA ESTADO FINAL] Estado terminal (${ship.distribucionEstado}) bloquea nuevos estados de tracking`,
+            `4. [REST POST] POST /proveedor/distribucion/${ship.docCenabast}/movimiento`
+          ];
+        }
+      }
+      else if (stageNum === 8) {
+        webhookEvent = 'FEDEX.POD_CEDIBLE_BASE64';
+        eventActionTitle = 'RESPALDO CEDIBLE PDF';
+        cenStateTag = ship.finalOutcome === 1
+          ? 'Cedible Base64 (Mov:1 Conforme)'
+          : 'Acta Rechazo PDF (Mov:3 Rechazado)';
+        cenEndpoint = '/WebApi/api/v1/proveedor/cedible';
+        cenMethod = 'POST';
+        shortEndpoint = '/cedible';
+        ship.cedibleSent = true;
+
+        cenPayload = {
+          Doc_Cenabast: ship.docCenabast,
+          Rut_Proveedor: ship.lab.rut,
+          Documento: ship.cedibleBase64
+        };
+
+        mwSteps = [
+          `1. [EVENTO POD] ${eventActionTitle} generado desde firma digital FedEx`,
+          `2. [CODIFICACIÓN] PDF codificado en Base64 (Máx. 10 cedibles por Doc_Cenabast)`,
+          `3. [REST POST] POST /api/v1/proveedor/cedible ➔ 201 Created (Cierre de Ciclo)`
+        ];
+        recordModulePass('HOSP', ship, `${eventActionTitle} ➔ ${cenStateTag}`);
+      }
+
+      // Actualizar estado visible en el propio camión/avión
+      ship.currentEventTitle = eventActionTitle;
+      ship.cenabastStateBadge = cenStateTag;
+      refreshShipmentMapTag(ship);
+
+      ship.lastWebhookPayload = {
+        eventType: webhookEvent,
+        operationalMilestone: eventActionTitle,
+        cenabastMappedState: {
+          DescMovimiento: ship.descMovimiento,
+          DescMovimientoGlosa: ship.descMovimiento === 1 ? '1: Entrega conforme' : ship.descMovimiento === 2 ? '2: En tránsito' : '3: Rechazado',
+          DistribucionEstado: ship.distribucionEstado,
+          DistribucionEstadoGlosa: ship.distribucionEstado === 1 ? '1: En preparación' : ship.distribucionEstado === 2 ? '2: En tránsito' : ship.distribucionEstado === 3 ? '3: Entregado' : ship.distribucionEstado === 4 ? '4: Rechazado' : '5: Anulado'
+        },
+        hmacSignature: generateHmacSignature(ship.trackingCode, webhookEvent),
+        timestamp: dt.iso,
+        trackingNumber: ship.trackingCode,
+        shipperTaxId: ship.lab.rut,
+        cenabastReference: ship.docCenabast,
+        telemetry: {
+          temperature: ship.lab.temp,
+          locationName: ship.locacion,
+          latitude: ship.lat,
+          longitude: ship.lon
+        }
+      };
+      ship.lastMiddlewareSteps = mwSteps;
+      ship.lastCenabastEndpoint = cenEndpoint;
+      ship.lastCenabastMethod = cenMethod;
+      ship.lastCenabastPayload = cenPayload;
+
+      ship.trackingHistory.unshift({
+        stage: stageNum,
+        milestone: eventActionTitle,
+        estado: ship.distribucionEstado,
+        movimiento: ship.descMovimiento,
+        stateBadge: cenStateTag,
+        locacion: ship.locacion,
+        fecha: dt.iso,
+        lat: ship.lat,
+        lon: ship.lon
+      });
+
+      const originPos = getStageWorldPosition(ship, stageNum);
+      spawnTwoHopMiddlewarePacket(
+        originPos,
+        ship,
+        shortEndpoint,
+        cenMethod,
+        cenEndpoint,
+        false,
+        eventActionTitle,
+        cenStateTag
+      );
+
+      if (autoPauseOnApiHit && !isPaused) {
+        isPaused = true;
+        updatePauseButtonUI();
+        shipments.forEach(s => refreshShipmentMapTag(s));
+        clearTimeout(autoPauseTimer);
+        autoPauseTimer = setTimeout(() => {
+          isPaused = false;
+          updatePauseButtonUI();
+          shipments.forEach(s => refreshShipmentMapTag(s));
+        }, 3500);
+      }
+
+      if (selectedShipment && selectedShipment.docCenabast === ship.docCenabast) {
+        renderInspector();
+      }
+      renderModuleQueues();
+    }
+
+    function buildTrackingPayload(ship, dt) {
+      return {
+        Doc_Cenabast: ship.docCenabast,
+        NroDocumento: ship.guia || ship.factura,
+        TipoDocumento: ship.guia ? 2 : 1,
+        FechaHoraEstimadaEntrega: dt.iso,
+        Detalles: [
+          {
+            DistribucionEstado: ship.distribucionEstado,
+            Locacion: ship.locacion,
+            FechaEvento: dt.iso
+          }
+        ],
+        Latitud: ship.lat,
+        Longitud: ship.lon
+      };
+    }
+
+    function getStageWorldPosition(ship, stageNum) {
+      if (stageNum === 1 || stageNum === 2) return ship.lab.pos.clone();
+      if (stageNum === 3) return NODE_POSITIONS.originStation.clone();
+      if (stageNum === 4 || stageNum === 5) return NODE_POSITIONS.superHub.clone();
+      if (stageNum === 6) return NODE_POSITIONS.destStation.clone();
+      return NODE_POSITIONS.hospital.clone();
+    }
+
+    /*************************************************************************
+     * 8. ESFERAS DE LLAMADOS Y RESPUESTAS CON HITO + ESTADO CENABAST EXPLÍCITO
+     *************************************************************************/
+    let packetUidCounter = 0;
+
+    function spawnTwoHopMiddlewarePacket(
+      groundPos,
+      ship,
+      shortEndpoint,
+      httpMethod,
+      endpoint,
+      isError400 = false,
+      eventActionTitle = 'PICKUP / RETIRO',
+      cenStateTag = 'Est:2 En Tránsito'
+    ) {
+      kpiWebhooks++;
+      updateKPIs();
+
+      const packetGroup = new THREE.Group();
+      const coreMat = new THREE.MeshBasicMaterial({ color: isError400 ? 0xf43f5e : 0xf59e0b });
+      const coreSphere = new THREE.Mesh(new THREE.SphereGeometry(1.0, 20, 20), coreMat);
+      packetGroup.add(coreSphere);
+
+      const haloMat = new THREE.MeshBasicMaterial({
+        color: isError400 ? 0xf43f5e : 0xff6600,
+        transparent: true,
+        opacity: 0.35,
+        wireframe: true
+      });
+      const haloSphere = new THREE.Mesh(new THREE.SphereGeometry(1.55, 12, 12), haloMat);
+      packetGroup.add(haloSphere);
+
+      const start = groundPos.clone().add(new THREE.Vector3(0, 6, 0));
+      const midCtrl = start.clone().lerp(NODE_POSITIONS.middleware, 0.5);
+      midCtrl.y += 10;
+
+      packetGroup.position.copy(start);
+      scene.add(packetGroup);
+
+      const packetTagEl = document.createElement('div');
+      packetTagEl.className = 'packet-tag border border-amber-400/90 mono';
+      document.getElementById('labels-layer').appendChild(packetTagEl);
+
+      const tetherLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      tetherLine.setAttribute('stroke-width', '1.2');
+      tetherLine.setAttribute('stroke-dasharray', '2,2');
+      document.getElementById('tethers-layer').appendChild(tetherLine);
+
+      const queueItem = {
+        id: `${ship.docCenabast}-${Date.now()}`,
+        docCenabast: ship.docCenabast,
+        trackingCode: ship.trackingCode,
+        eventActionTitle,
+        cenStateTag,
+        shortEndpoint,
+        httpMethod,
+        endpoint,
+        phase: 'INBOUND_WEBHOOK'
+      };
+      middlewareActiveQueue.unshift(queueItem);
+
+      const pkObj = {
+        uid: ++packetUidCounter,
+        mesh: packetGroup,
+        coreMat,
+        haloMat,
+        tagEl: packetTagEl,
+        tetherLine,
+        tetherColor: '#f59e0b',
+        hop: 1,
+        t: 0,
+        holdTimer: 0,
+        p0: start,
+        p1: midCtrl,
+        p2: NODE_POSITIONS.middleware.clone(),
+        ship,
+        shortEndpoint,
+        httpMethod,
+        endpoint,
+        eventActionTitle,
+        cenStateTag,
+        isError400,
+        responseStatus: 201,
+        queueItem
+      };
+
+      updatePacketTagVisual(pkObj);
+      dataPackets.push(pkObj);
+    }
+
+    /**
+     * Etiqueta quirúrgica de 1 sola línea que muestra en TODOS los saltos:
+     * 1) El evento que se gatilla (Pickup/Retiro, Scan, Reparto, POD)
+     * 2) El estado mapeado requerido por CENABAST (Est:1..5 / Mov:1..3)
+     * 3) El método/endpoint y el #Doc_Cenabast
+     */
+    function updatePacketTagVisual(pk) {
+      const s = pk.ship;
+      if (pk.hop === 1) {
+        // Tramo 1: Webhook saliendo del punto físico hacia el Middleware
+        pk.tetherColor = '#f59e0b';
+        pk.tagEl.className = 'packet-tag border border-amber-400/95 mono';
+        pk.tagEl.innerHTML = `
+          <span class="px-1 py-0.2 rounded bg-amber-500 text-slate-950 font-extrabold">WH FEDEX</span>
+          <span class="font-extrabold text-amber-200">${pk.eventActionTitle}</span>
+          <span class="px-1 py-0.2 rounded bg-cyan-500/25 text-cyan-200 border border-cyan-400/40 font-bold">➔ ${pk.cenStateTag}</span>
+          <span class="text-slate-300">#${s.docCenabast}</span>
+        `;
+      }
+      else if (pk.hop === 2) {
+        // Tramo 2: Traduciendo en el Middleware
+        pk.tetherColor = '#a855f7';
+        pk.tagEl.className = 'packet-tag border border-purple-400/95 mono';
+        pk.tagEl.innerHTML = `
+          <span class="px-1 py-0.2 rounded bg-purple-500 text-white font-extrabold">⚡ MAPEO MW</span>
+          <span class="font-bold text-amber-200">${pk.eventActionTitle}</span>
+          <span class="px-1 py-0.2 rounded bg-emerald-500/25 text-emerald-200 border border-emerald-400/40 font-bold">${pk.cenStateTag}</span>
+          <span class="text-cyan-300">${pk.httpMethod} ${pk.shortEndpoint}</span>
+        `;
+      }
+      else if (pk.hop === 3) {
+        // Tramo 3: Llamado REST viajando del Middleware al Gateway de CENABAST
+        pk.tetherColor = pk.isError400 ? '#f43f5e' : '#00e5ff';
+        const badgeBg = pk.isError400
+          ? 'bg-rose-500 text-white'
+          : pk.httpMethod === 'GET'
+            ? 'bg-sky-400 text-slate-950'
+            : pk.httpMethod === 'PUT'
+              ? 'bg-amber-400 text-slate-950'
+              : 'bg-cyan-400 text-slate-950';
+        const borderCol = pk.isError400 ? 'border-rose-400/95' : 'border-cyan-400/95';
+
+        pk.tagEl.className = `packet-tag border ${borderCol} mono`;
+        pk.tagEl.innerHTML = `
+          <span class="px-1 py-0.2 rounded ${badgeBg} font-extrabold">${pk.httpMethod} ${pk.shortEndpoint}</span>
+          <span class="px-1 py-0.2 rounded bg-slate-800 text-amber-300 border border-amber-400/40 font-bold">${pk.eventActionTitle}</span>
+          <span class="font-extrabold text-cyan-200">[${pk.cenStateTag}]</span>
+          <span class="text-white">#${s.docCenabast}</span>
+        `;
+      }
+      else if (pk.hop === 4) {
+        // Tramo 4: Respuesta de CENABAST confirmando el estado registrado
+        const isErr = pk.isError400;
+        pk.tetherColor = isErr ? '#f43f5e' : '#10b981';
+        const statusShort = isErr ? '400 RECHAZADO' : (pk.httpMethod === 'GET' ? '200 OK' : '201 CREADO');
+        const badgeClass = isErr ? 'bg-rose-500 text-white' : 'bg-emerald-400 text-slate-950';
+        const borderClass = isErr ? 'border-rose-400/95' : 'border-emerald-400/95';
+
+        pk.tagEl.className = `packet-tag border ${borderClass} mono`;
+        pk.tagEl.innerHTML = `
+          <span class="px-1 py-0.2 rounded ${badgeClass} font-extrabold">◄ ${statusShort}</span>
+          <span class="font-bold ${isErr ? 'text-rose-200' : 'text-emerald-200'}">${pk.cenStateTag}</span>
+          <span class="text-slate-300">(${pk.eventActionTitle})</span>
+          <span class="text-white">#${s.docCenabast}</span>
+        `;
+      }
+    }
+
+    function recordModulePass(modKey, ship, actionDesc) {
+      const mod = MODULES_DIRECTORY[modKey];
+      if (!mod) return;
+      mod.history.unshift({
+        docCenabast: ship.docCenabast,
+        tracking: ship.trackingCode,
+        action: actionDesc,
+        time: getFormattedDateTime().timeCEN
+      });
+      if (mod.history.length > 18) mod.history.pop();
+    }
+
+    /*************************************************************************
+     * 9. BUCLE PRINCIPAL DE ANIMACIÓN THREE.JS
+     *************************************************************************/
+    function animate() {
+      requestAnimationFrame(animate);
+      const rawDelta = Math.min(clock.getDelta(), 0.1);
+      const dt = isPaused ? 0 : rawDelta * simSpeed;
+      const elapsed = clock.getElapsedTime();
+
+      animatedProps.forEach((p) => {
+        if (p.type === 'spinY') p.mesh.rotation.y += rawDelta * p.speed;
+        else if (p.type === 'spinZ') p.mesh.rotation.z += rawDelta * p.speed;
+        else if (p.type === 'pulseOpacity') {
+          p.mesh.material.opacity = 0.18 + Math.abs(Math.sin(elapsed * p.speed)) * 0.35;
+        }
+      });
+
+      middlewareRings.forEach((r, idx) => {
+        r.rotation.z += rawDelta * (idx === 0 ? 1.4 : -1.1);
+        r.rotation.x += rawDelta * 0.45;
+      });
+      cenabastRings.forEach((r, idx) => {
+        r.rotation.z += rawDelta * (idx === 0 ? -0.9 : 0.7);
+      });
+
+      if (moduleHighlightRing) {
+        moduleHighlightRing.rotation.z += rawDelta * 0.8;
+      }
+
+      if (!isPaused && autoSpawn) {
+        autoSpawnAccumulator += rawDelta * simSpeed;
+        if (autoSpawnAccumulator > 9.5 && shipments.filter(s => s.stage < 8).length < 5) {
+          autoSpawnAccumulator = 0;
+          const randomLab = Math.floor(Math.random() * 3);
+          const randomRule = Math.random() > 0.4 ? 'guia' : 'factura';
+          const randomTrans = Math.random() > 0.45 ? 'air' : 'ground';
+          spawnShipment({ labIdx: randomLab, docRule: randomRule, transport: randomTrans, finalOutcome: 1 });
+        }
+      }
+
+      for (let i = shipments.length - 1; i >= 0; i--) {
+        const s = shipments[i];
+        if (s.stage >= 8) continue;
+
+        s.progress += dt * 0.36;
+        if (s.progress >= 1) {
+          s.progress = 0;
+          s.stage++;
+          triggerStageIntegration(s, s.stage);
+          renderShipmentsList();
+        }
+        updateShipmentTransform3D(s);
+      }
+
+      // Actualizar esferas de llamados/respuestas
+      for (let i = dataPackets.length - 1; i >= 0; i--) {
+        const pk = dataPackets[i];
+        pk.mesh.rotation.y += rawDelta * 2.5;
+
+        if (pk.hop === 1) {
+          pk.t += dt * 0.72;
+          if (pk.t >= 1) {
+            pk.t = 0;
+            pk.hop = 2;
+            pk.holdTimer = 0;
+            pk.queueItem.phase = 'TRANSLATING';
+            pk.mesh.position.copy(NODE_POSITIONS.middleware);
+            pk.mesh.scale.setScalar(1.3);
+            pk.coreMat.color.setHex(0xa855f7);
+            pk.haloMat.color.setHex(0xf59e0b);
+            updatePacketTagVisual(pk);
+            renderModuleQueues();
+          } else {
+            const pos = getQuadraticPoint(pk.p0, pk.p1, pk.p2, pk.t);
+            pk.mesh.position.copy(pos);
+          }
+        }
+        else if (pk.hop === 2) {
+          pk.holdTimer += dt * 1.35;
+          if (pk.holdTimer >= 0.65) {
+            pk.hop = 3;
+            pk.t = 0;
+            pk.queueItem.phase = 'FORWARDING_CENABAST';
+            pk.mesh.scale.setScalar(1.0);
+            pk.coreMat.color.setHex(pk.isError400 ? 0xf43f5e : 0x00e5ff);
+            pk.haloMat.color.setHex(pk.isError400 ? 0xf43f5e : 0x38bdf8);
+            pk.p0 = NODE_POSITIONS.middleware.clone();
+            pk.p1 = new THREE.Vector3(2, 32, -18);
+            pk.p2 = NODE_POSITIONS.cenabastCloud.clone();
+            updatePacketTagVisual(pk);
+            recordModulePass('MIDDLEWARE', pk.ship, `${pk.eventActionTitle} ➔ ${pk.cenStateTag}`);
+            renderModuleQueues();
+          }
+        }
+        else if (pk.hop === 3) {
+          pk.t += dt * 0.78;
+          if (pk.t >= 1) {
+            pk.t = 0;
+            pk.hop = 4;
+            const status = pk.isError400 ? 400 : (pk.httpMethod === 'GET' ? 200 : 201);
+            pk.responseStatus = status;
+            if (pk.isError400) kpi400++; else kpi201++;
+            updateKPIs();
+
+            apiLogs.unshift({
+              time: getFormattedDateTime().timeCEN,
+              docCenabast: pk.ship.docCenabast,
+              tracking: pk.ship.trackingCode,
+              eventTitle: pk.eventActionTitle,
+              cenState: pk.cenStateTag,
+              method: pk.httpMethod,
+              endpoint: pk.endpoint,
+              status
+            });
+            if (apiLogs.length > 35) apiLogs.pop();
+            recordModulePass('CLOUD', pk.ship, `HTTP ${status} • ${pk.cenStateTag}`);
+
+            pk.coreMat.color.setHex(pk.isError400 ? 0xf43f5e : 0x10b981);
+            pk.haloMat.color.setHex(pk.isError400 ? 0xf43f5e : 0x34d399);
+            pk.p0 = NODE_POSITIONS.cenabastCloud.clone();
+            pk.p1 = new THREE.Vector3(2, 20, -18);
+            pk.p2 = NODE_POSITIONS.middleware.clone();
+            updatePacketTagVisual(pk);
+
+            if (activeInspectorTab === 'logs') renderInspector();
+            renderModuleQueues();
+          } else {
+            const pos = getQuadraticPoint(pk.p0, pk.p1, pk.p2, pk.t);
+            pk.mesh.position.copy(pos);
+          }
+        }
+        else if (pk.hop === 4) {
+          pk.t += dt * 0.92;
+          if (pk.t >= 1) {
+            scene.remove(pk.mesh);
+            if (pk.tagEl && pk.tagEl.parentNode) pk.tagEl.parentNode.removeChild(pk.tagEl);
+            if (pk.tetherLine && pk.tetherLine.parentNode) pk.tetherLine.parentNode.removeChild(pk.tetherLine);
+            const qIdx = middlewareActiveQueue.indexOf(pk.queueItem);
+            if (qIdx !== -1) middlewareActiveQueue.splice(qIdx, 1);
+            dataPackets.splice(i, 1);
+            renderModuleQueues();
+          } else {
+            const pos = getQuadraticPoint(pk.p0, pk.p1, pk.p2, pk.t);
+            pk.mesh.position.copy(pos);
+          }
+        }
+      }
+
+      if (followShipmentCamera && selectedShipment) {
+        const targetPos = selectedShipment.mesh.position.clone();
+        controls.target.lerp(targetPos, 0.08);
+        const desiredCam = targetPos.clone().add(new THREE.Vector3(0, 24, 45));
+        camera.position.lerp(desiredCam, 0.06);
+      } else if (cameraLerpGoal) {
+        camera.position.lerp(cameraLerpGoal.pos, 0.09);
+        controls.target.lerp(cameraLerpGoal.target, 0.09);
+        if (camera.position.distanceTo(cameraLerpGoal.pos) < 0.5) {
+          cameraLerpGoal = null;
+        }
+      }
+
+      controls.update();
+      updateHTMLOverlaysWithAntiCollision();
+      renderer.render(scene, camera);
+    }
+
+    function getQuadraticPoint(p0, p1, p2, t) {
+      const inv = 1 - t;
+      return new THREE.Vector3(
+        inv * inv * p0.x + 2 * inv * t * p1.x + t * t * p2.x,
+        inv * inv * p0.y + 2 * inv * t * p1.y + t * t * p2.y,
+        inv * inv * p0.z + 2 * inv * t * p1.z + t * t * p2.z
+      );
+    }
+
+    function updateShipmentTransform3D(s) {
+      const t = s.progress;
+      const nextT = Math.min(1.0, t + 0.04);
+
+      const truckMesh = s.mesh.getObjectByName('truckMesh');
+      const planeMesh = s.mesh.getObjectByName('planeMesh');
+      const isFlyingNow = (s.stage === 5 && s.transport === 'air');
+      if (truckMesh && planeMesh) {
+        truckMesh.visible = !isFlyingNow;
+        planeMesh.visible = isFlyingNow;
+      }
+
+      const pos = evalStageCurvePosition(s, s.stage, t);
+      const nextPos = evalStageCurvePosition(s, s.stage, nextT);
+
+      s.mesh.position.copy(pos);
+      if (pos.distanceToSquared(nextPos) > 0.001) {
+        const angle = Math.atan2(nextPos.z - pos.z, nextPos.x - pos.x);
+        s.mesh.rotation.y = -angle;
+      }
+    }
+
+    function evalStageCurvePosition(s, stage, t) {
+      if (stage === 1) {
+        return s.lab.pos.clone().add(new THREE.Vector3(t * 6, 0, 0));
+      } else if (stage === 2) {
+        return getQuadraticPoint(
+          s.lab.pos.clone().add(new THREE.Vector3(8, 0, 0)),
+          new THREE.Vector3(-72, 0, s.lab.pos.z * 0.45),
+          NODE_POSITIONS.originStation.clone().add(new THREE.Vector3(-8, 0, 0)),
+          t
+        );
+      } else if (stage === 3) {
+        return NODE_POSITIONS.originStation.clone().lerp(NODE_POSITIONS.superHub, t * 0.85);
+      } else if (stage === 4) {
+        return NODE_POSITIONS.superHub.clone().add(new THREE.Vector3((t - 0.5) * 8, 0, 0));
+      } else if (stage === 5) {
+        if (s.transport === 'air') {
+          return getQuadraticPoint(
+            NODE_POSITIONS.superHub.clone().add(new THREE.Vector3(0, 9, 0)),
+            new THREE.Vector3(24, 24, -4),
+            NODE_POSITIONS.destStation.clone().add(new THREE.Vector3(0, 6, 0)),
+            t
+          );
+        } else {
+          return getQuadraticPoint(
+            NODE_POSITIONS.superHub.clone().add(new THREE.Vector3(11, 0, 0)),
+            new THREE.Vector3(24, 0, 9),
+            NODE_POSITIONS.destStation.clone().add(new THREE.Vector3(-8, 0, 0)),
+            t
+          );
+        }
+      } else if (stage === 6) {
+        return NODE_POSITIONS.destStation.clone().lerp(NODE_POSITIONS.hospital, t * 0.88);
+      }
+      return NODE_POSITIONS.hospital.clone().add(new THREE.Vector3(-9, 0, 3));
+    }
+
+    /*************************************************************************
+     * 9.1 MOTOR ANTICOLISIÓN 2D PARA ETIQUETAS (EVITA CUALQUIER SOLAPAMIENTO)
+     *************************************************************************/
+    function projectWorldToScreenXY(worldVec) {
+      const v = worldVec.clone().project(camera);
+      if (v.z > 1) return null;
+      return {
+        x: (v.x * 0.5 + 0.5) * window.innerWidth,
+        y: (-(v.y * 0.5) + 0.5) * window.innerHeight
+      };
+    }
+
+    function boxesOverlap(a, b, pad = 5) {
+      return !(
+        a.right + pad < b.left ||
+        a.left - pad > b.right ||
+        a.bottom + pad < b.top ||
+        a.top - pad > b.bottom
+      );
+    }
+
+    function makeBox(cx, cy, w, h) {
+      return {
+        cx, cy, w, h,
+        left: cx - w / 2,
+        right: cx + w / 2,
+        top: cy - h / 2,
+        bottom: cy + h / 2
+      };
+    }
+
+    function updateHTMLOverlaysWithAntiCollision() {
+      const occupiedBoxes = [];
+
+      // 1. Etiquetas de edificios/nodos
+      htmlLabels.forEach((item) => {
+        const pt = projectWorldToScreenXY(item.pos);
+        if (!pt) {
+          item.el.style.display = 'none';
+          return;
+        }
+        item.el.style.display = 'block';
+        item.el.style.left = `${pt.x}px`;
+        item.el.style.top = `${pt.y}px`;
+
+        const w = item.el.offsetWidth || 185;
+        const h = item.el.offsetHeight || 38;
+        occupiedBoxes.push(makeBox(pt.x, pt.y - h * 0.5, w, h));
+      });
+
+      // 2. Etiquetas de envíos activos (visibles incluso si están detenidos o en etapa final reciente)
+      shipments.forEach((s, idx) => {
+        if (s.stage >= 8 && idx > 1) {
+          s.tagEl.style.display = 'none';
+          return;
+        }
+        const pt = projectWorldToScreenXY(s.mesh.position.clone().add(new THREE.Vector3(0, 4.0, 0)));
+        if (!pt) {
+          s.tagEl.style.display = 'none';
+          return;
+        }
+        s.tagEl.style.display = 'flex';
+        const w = s.tagEl.offsetWidth || 210;
+        const h = s.tagEl.offsetHeight || 20;
+
+        let cx = pt.x;
+        let cy = pt.y - 14;
+        let candidate = makeBox(cx, cy, w, h);
+
+        let tries = 0;
+        while (tries < 10 && occupiedBoxes.some(ob => boxesOverlap(candidate, ob, 4))) {
+          cy -= (h + 5);
+          candidate = makeBox(cx, cy, w, h);
+          tries++;
+        }
+
+        s.tagEl.style.left = `${cx}px`;
+        s.tagEl.style.top = `${cy}px`;
+        occupiedBoxes.push(candidate);
+      });
+
+      // 3. Micro-Pills de círculos de datos sin solapamiento
+      const sortedPackets = [...dataPackets].sort((a, b) => a.uid - b.uid);
+
+      sortedPackets.forEach((pk) => {
+        const sphereScreen = projectWorldToScreenXY(pk.mesh.position);
+        if (!sphereScreen) {
+          pk.tagEl.style.display = 'none';
+          pk.tetherLine.style.display = 'none';
+          return;
+        }
+
+        pk.tagEl.style.display = 'flex';
+        const w = pk.tagEl.offsetWidth || 230;
+        const h = pk.tagEl.offsetHeight || 20;
+
+        const dirY = pk.hop === 4 ? 1 : -1;
+        let cx = sphereScreen.x;
+        let cy = sphereScreen.y + dirY * 26;
+        let candidate = makeBox(cx, cy, w, h);
+
+        let step = 0;
+        while (step < 16 && occupiedBoxes.some(ob => boxesOverlap(candidate, ob, 6))) {
+          step++;
+          cy += dirY * (h + 6);
+          if (step % 2 === 0) {
+            cx += (pk.uid % 2 === 0 ? 14 : -14);
+          }
+          candidate = makeBox(cx, cy, w, h);
+        }
+
+        cx = THREE.MathUtils.clamp(cx, w * 0.5 + 10, window.innerWidth - w * 0.5 - 10);
+        cy = THREE.MathUtils.clamp(cy, h * 0.5 + 56, window.innerHeight - h * 0.5 - 14);
+        candidate = makeBox(cx, cy, w, h);
+
+        pk.tagEl.style.left = `${cx}px`;
+        pk.tagEl.style.top = `${cy}px`;
+        occupiedBoxes.push(candidate);
+
+        pk.tetherLine.style.display = 'block';
+        pk.tetherLine.setAttribute('x1', String(sphereScreen.x));
+        pk.tetherLine.setAttribute('y1', String(sphereScreen.y));
+        pk.tetherLine.setAttribute('x2', String(cx));
+        pk.tetherLine.setAttribute('y2', String(cy + (cy < sphereScreen.y ? h * 0.5 : -h * 0.5)));
+        pk.tetherLine.setAttribute('stroke', pk.tetherColor);
+      });
+    }
+
+    /*************************************************************************
+     * 10. RENDERIZADO DE INTERFAZ, CONSOLA MIDDLEWARE Y COLAS DE MÓDULOS
+     *************************************************************************/
+    function selectShipment(ship, focusCam = false) {
+      selectedShipment = ship;
+      document.getElementById('inspected-doc-subtitle').textContent =
+        `Doc #${ship.docCenabast} • ${ship.currentEventTitle} (${ship.cenabastStateBadge})`;
+      if (focusCam) {
+        cameraLerpGoal = {
+          pos: ship.mesh.position.clone().add(new THREE.Vector3(0, 26, 48)),
+          target: ship.mesh.position.clone()
+        };
+      }
+      renderShipmentsList();
+      renderInspector();
+    }
+
+    function selectModule(modKey, centerCamera = false) {
+      selectedModuleKey = modKey;
+      const mod = MODULES_DIRECTORY[modKey];
+      if (!mod) return;
+
+      document.getElementById('mod-icon').textContent = mod.icon;
+      document.getElementById('mod-title').textContent = mod.title;
+      document.getElementById('mod-badge').textContent = mod.badge;
+      document.getElementById('mod-endpoint').textContent = mod.endpoint;
+
+      document.querySelectorAll('.mod-pill').forEach((btn) => {
+        const active = btn.dataset.mod === modKey;
+        btn.className = active
+          ? 'mod-pill px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-500/30 text-amber-200 border border-amber-400 whitespace-nowrap'
+          : 'mod-pill px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-slate-800/90 hover:bg-slate-700 text-slate-300 whitespace-nowrap';
+      });
+
+      htmlLabels.forEach((lbl) => {
+        lbl.el.classList.toggle('active-node', lbl.modKey === modKey);
+      });
+
+      if (moduleHighlightRing) {
+        moduleHighlightRing.position.set(mod.pos.x, Math.max(0.25, mod.pos.y - 3), mod.pos.z);
+      }
+
+      if (centerCamera) {
+        followShipmentCamera = false;
+        updateFollowButtonUI();
+        cameraLerpGoal = {
+          pos: mod.pos.clone().add(new THREE.Vector3(0, 24, 48)),
+          target: mod.pos.clone()
+        };
+      }
+
+      renderModuleQueues();
+    }
+
+    function renderModuleQueues() {
+      const mod = MODULES_DIRECTORY[selectedModuleKey];
+      if (!mod) return;
+
+      let arriving = [];
+      let current = [];
+      const processed = mod.history || [];
+
+      if (selectedModuleKey === 'MIDDLEWARE') {
+        arriving = middlewareActiveQueue
+          .filter(q => q.phase === 'INBOUND_WEBHOOK')
+          .map(q => `#${q.docCenabast} • WH: ${q.eventActionTitle}`);
+        current = middlewareActiveQueue
+          .filter(q => q.phase === 'TRANSLATING' || q.phase === 'FORWARDING_CENABAST')
+          .map(q => `#${q.docCenabast} • ${q.eventActionTitle} ➔ [${q.cenStateTag}]`);
+      } else if (selectedModuleKey === 'CLOUD') {
+        arriving = middlewareActiveQueue
+          .filter(q => q.phase === 'FORWARDING_CENABAST')
+          .map(q => `#${q.docCenabast} ➔ ${q.httpMethod} ${q.shortEndpoint} (${q.cenStateTag})`);
+        current = dataPackets
+          .filter(p => p.hop === 4)
+          .map(p => `#${p.ship.docCenabast} ➔ HTTP ${p.responseStatus} (${p.cenStateTag})`);
+      } else if (mod.labIndex !== undefined) {
+        current = shipments
+          .filter(s => s.lab.id === mod.labIndex && s.stage === 1)
+          .map(s => `#${s.docCenabast} • ${s.currentEventTitle} (${s.cenabastStateBadge})`);
+      } else {
+        arriving = shipments
+          .filter(s => (mod.inboundStages || []).includes(s.stage))
+          .map(s => `#${s.docCenabast} • ${s.currentEventTitle} (${s.cenabastStateBadge})`);
+        current = shipments
+          .filter(s => s.stage === mod.stageFilter)
+          .map(s => `#${s.docCenabast} • ${s.currentEventTitle} (${s.cenabastStateBadge})`);
+      }
+
+      document.getElementById('mod-count-in').textContent = arriving.length;
+      document.getElementById('mod-count-curr').textContent = current.length;
+      document.getElementById('mod-count-out').textContent = processed.length;
+
+      document.getElementById('mod-list-in').innerHTML = arriving.length
+        ? arriving.map(item => `<div class="px-2 py-1 rounded bg-amber-500/10 text-amber-200 border border-amber-500/20">${item}</div>`).join('')
+        : `<div class="text-slate-500 italic">Sin envíos aproximándose</div>`;
+
+      document.getElementById('mod-list-curr').innerHTML = current.length
+        ? current.map(item => `<div class="px-2 py-1 rounded bg-cyan-500/10 text-cyan-200 border border-cyan-500/20">${item}</div>`).join('')
+        : `<div class="text-slate-500 italic">Módulo libre en este instante</div>`;
+
+      document.getElementById('mod-list-out').innerHTML = processed.length
+        ? processed.map(p => `<div class="px-2 py-1 rounded bg-emerald-500/10 text-emerald-200 border border-emerald-500/20">#${p.docCenabast} • ${p.action} <span class="text-slate-400">(${p.time})</span></div>`).join('')
+        : `<div class="text-slate-500 italic">Sin historial aún</div>`;
+    }
+
+    function renderShipmentsList() {
+      const container = document.getElementById('shipments-list');
+      const activeCount = shipments.filter(s => s.stage < 8).length;
+      document.getElementById('active-count-badge').textContent = activeCount;
+
+      container.innerHTML = shipments.slice(0, 12).map((s) => {
+        const isSel = selectedShipment && selectedShipment.docCenabast === s.docCenabast;
+        const badgeStyle = s.distribucionEstado === 3
+          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+          : (s.distribucionEstado === 4 || s.distribucionEstado === 5)
+            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+            : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40';
+
+        return `
+          <div data-doc="${s.docCenabast}" class="ship-card cursor-pointer p-2.5 rounded-xl border transition ${
+            isSel ? 'bg-slate-800/95 border-orange-500 shadow-md' : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+          }">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-extrabold mono text-white">#${s.docCenabast} <span class="text-orange-400">(${s.trackingCode})</span></span>
+              <span class="text-[9.5px] mono px-1.5 py-0.5 rounded font-bold ${badgeStyle}">
+                ${isPaused && s.stage < 8 ? '⏸ ' : ''}${s.currentEventTitle}
+              </span>
+            </div>
+            <div class="text-[10.5px] mono text-emerald-300 mt-1 truncate">Mapeo CENABAST: ${s.cenabastStateBadge}</div>
+          </div>
+        `;
+      }).join('');
+
+      container.querySelectorAll('.ship-card').forEach((el) => {
+        el.addEventListener('click', () => {
+          const doc = parseInt(el.dataset.doc, 10);
+          const found = shipments.find(x => x.docCenabast === doc);
+          if (found) selectShipment(found, true);
+        });
+      });
+    }
+
+    function renderInspector() {
+      const body = document.getElementById('inspector-body');
+      const s = selectedShipment || shipments[0];
+      if (!s) {
+        body.innerHTML = `<div class="text-slate-400 p-4 text-center">Generando primer despacho...</div>`;
+        return;
+      }
+
+      if (activeInspectorTab === 'middleware') {
+        body.innerHTML = `
+          <div class="bg-slate-900/95 border border-cyan-500/40 rounded-xl p-2.5 flex items-center justify-between">
+            <div>
+              <div class="text-[10px] uppercase text-slate-400 font-bold">Hito FedEx Gatillado</div>
+              <div class="text-xs font-extrabold mono text-amber-300">${s.currentEventTitle}</div>
+            </div>
+            <span class="text-slate-500 font-bold">➔</span>
+            <div class="text-right">
+              <div class="text-[10px] uppercase text-slate-400 font-bold">Estado CENABAST v1.6.0</div>
+              <div class="text-xs font-extrabold mono text-cyan-300">${s.cenabastStateBadge}</div>
+            </div>
+          </div>
+
+          <div class="bg-amber-500/10 border border-amber-500/30 rounded-xl p-2.5">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[11px] font-extrabold uppercase text-amber-300">1. Entrada al Middleware (FedEx Webhook)</span>
+              <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200">POST /webhook/fedex</span>
+            </div>
+            <pre class="mono text-[10px] text-amber-100 overflow-x-auto bg-slate-950/80 p-2 rounded-lg border border-slate-800">${JSON.stringify(s.lastWebhookPayload, null, 2)}</pre>
+          </div>
+
+          <div class="bg-purple-500/10 border border-purple-500/30 rounded-xl p-2.5">
+            <div class="text-[11px] font-extrabold uppercase text-purple-300 mb-1.5">2. Mapeo y Ejecución Interna del Middleware</div>
+            <div class="space-y-1 mono text-[10px] text-slate-200">
+              ${(s.lastMiddlewareSteps || []).map(step => `<div class="px-2 py-1 rounded bg-slate-900/90 border border-slate-800">${step}</div>`).join('')}
+            </div>
+          </div>
+
+          <div class="bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-2.5">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[11px] font-extrabold uppercase text-cyan-300">3. Salida Traducida a CENABAST v1.6.0</span>
+              <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-200">${s.lastCenabastMethod}</span>
+            </div>
+            <div class="text-[10px] mono text-emerald-300 mb-1 truncate">${s.lastCenabastEndpoint}</div>
+            <pre class="mono text-[10px] text-cyan-100 overflow-x-auto bg-slate-950/80 p-2 rounded-lg border border-slate-800">${JSON.stringify(s.lastCenabastPayload, null, 2)}</pre>
+          </div>
+        `;
+      }
+      else if (activeInspectorTab === 'payload') {
+        body.innerHTML = `
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-bold text-cyan-300">${s.lastCenabastMethod} ${s.lastCenabastEndpoint}</span>
+              <span class="text-[10px] mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">HTTP 201/200</span>
+            </div>
+            <div class="text-[10px] mono text-amber-300">Hito: ${s.currentEventTitle} ➔ ${s.cenabastStateBadge}</div>
+            <pre class="mono text-[10px] text-emerald-300 overflow-x-auto bg-slate-950 p-2.5 rounded-lg border border-slate-800">${JSON.stringify(s.lastCenabastPayload, null, 2)}</pre>
+          </div>
+        `;
+      }
+      else if (activeInspectorTab === 'tracking') {
+        const dt = getFormattedDateTime();
+        const trkPayload = buildTrackingPayload(s, dt);
+        body.innerHTML = `
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-bold text-cyan-300">POST /api/v1/distribucion/tracking (Sección 7.3.4)</span>
+              <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">DistribucionEstado: ${s.distribucionEstado}</span>
+            </div>
+            <pre class="mono text-[10px] text-cyan-200 overflow-x-auto bg-slate-950 p-2 rounded-lg border border-slate-800">${JSON.stringify(trkPayload, null, 2)}</pre>
+            <div class="text-[11px] font-bold text-slate-300 pt-1">Bitácora de Estados Mapeados del Envío:</div>
+            <div class="space-y-1 max-h-44 overflow-y-auto">
+              ${s.trackingHistory.map(h => `
+                <div class="p-1.5 rounded bg-slate-950 border border-slate-800 text-[10px] mono">
+                  <div class="flex items-center justify-between">
+                    <span class="text-amber-300 font-bold">${h.milestone}</span>
+                    <span class="text-cyan-300">${h.stateBadge}</span>
+                  </div>
+                  <div class="text-slate-400 truncate">${h.locacion} (${h.lat}, ${h.lon})</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }
+      else if (activeInspectorTab === 'cedible') {
+        const cedPayload = {
+          Doc_Cenabast: s.docCenabast,
+          Rut_Proveedor: s.lab.rut,
+          Documento: s.cedibleBase64
+        };
+        body.innerHTML = `
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-bold text-emerald-300">POST /api/v1/proveedor/cedible (Sección 7.3.2.3)</span>
+              <span class="text-[10px] mono px-1.5 py-0.5 rounded ${s.cedibleSent ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}">
+                ${s.cedibleSent ? 'ENVIADO (201)' : 'PENDIENTE POD'}
+              </span>
+            </div>
+            <p class="text-[11px] text-slate-300">El Middleware convierte el comprobante POD de FedEx (Guía ${s.trackingCode}) en PDF Base64:</p>
+            <pre class="mono text-[10px] text-emerald-200 overflow-x-auto bg-slate-950 p-2 rounded-lg border border-slate-800">${JSON.stringify(cedPayload, null, 2)}</pre>
+          </div>
+        `;
+      }
+      else if (activeInspectorTab === 'logs') {
+        body.innerHTML = `
+          <div class="space-y-1.5">
+            ${apiLogs.map(l => `
+              <div class="p-2 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center justify-between text-[10px] mono">
+                <div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="font-bold ${l.status === 400 ? 'text-rose-400' : 'text-cyan-300'}">${l.method}</span>
+                    <span class="text-amber-300 font-bold">${l.eventTitle || ''}</span>
+                    <span class="text-emerald-300">[${l.cenState || ''}]</span>
+                  </div>
+                  <div class="text-slate-400">Doc #${l.docCenabast} • G:${l.tracking} • ${l.time}</div>
+                </div>
+                <span class="px-1.5 py-0.5 rounded font-bold ${
+                  l.status === 400 ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300'
+                }">HTTP ${l.status}</span>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+    }
+
+    function updateKPIs() {
+      document.getElementById('kpi-active').textContent = shipments.filter(s => s.stage < 8).length;
+      document.getElementById('kpi-webhooks').textContent = kpiWebhooks;
+      document.getElementById('kpi-201').textContent = kpi201;
+      document.getElementById('kpi-400').textContent = kpi400;
+    }
+
+    function updatePauseButtonUI() {
+      const btn = document.getElementById('btn-pause');
+      btn.textContent = isPaused ? '▶ Reanudar' : '⏸ Pausar';
+      btn.className = isPaused
+        ? 'px-2 py-1 rounded text-[11px] font-bold bg-orange-500/30 text-orange-200 border border-orange-500/50 transition'
+        : 'px-2 py-1 rounded text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 transition';
+    }
+
+    function updateFollowButtonUI() {
+      const btn = document.getElementById('btn-follow-cam');
+      btn.textContent = followShipmentCamera ? '🎥 Siguiendo: ON' : '🎥 Seguir';
+      btn.className = followShipmentCamera
+        ? 'text-[11px] px-2 py-0.5 rounded bg-orange-500/30 text-orange-200 border border-orange-400 transition'
+        : 'text-[11px] px-2 py-0.5 rounded bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 transition';
+    }
+
+    /*************************************************************************
+     * 11. EVENTOS DE USUARIO, CONTROLES DE PANORÁMICA Y ZOOM
+     *************************************************************************/
+    function bindUIEvents() {
+      document.getElementById('btn-spawn').addEventListener('click', () => spawnShipment());
+
+      document.getElementById('btn-pan-left').addEventListener('click', () => panCameraHorizontally(-32));
+      document.getElementById('btn-pan-right').addEventListener('click', () => panCameraHorizontally(32));
+      document.getElementById('btn-zoom-in').addEventListener('click', () => zoomCameraStep(0.78));
+      document.getElementById('btn-zoom-out').addEventListener('click', () => zoomCameraStep(1.25));
+
+      document.getElementById('btn-mouse-mode').addEventListener('click', (e) => {
+        leftClickPanMode = !leftClickPanMode;
+        controls.mouseButtons.LEFT = leftClickPanMode ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+        e.currentTarget.innerHTML = leftClickPanMode
+          ? '🖐️ Clic Izq & Der: Arrastrar'
+          : '🖱️ Clic Der: Arrastrar';
+        e.currentTarget.className = leftClickPanMode
+          ? 'px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-500/30 text-amber-200 border border-amber-400 transition flex items-center gap-1'
+          : 'px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 transition flex items-center gap-1';
+      });
+
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowLeft') panCameraHorizontally(-24);
+        else if (e.key === 'ArrowRight') panCameraHorizontally(24);
+        else if (e.key === '+' || e.key === '=') zoomCameraStep(0.82);
+        else if (e.key === '-') zoomCameraStep(1.2);
+      });
+
+      document.getElementById('btn-auth-ping').addEventListener('click', () => {
+        const s = selectedShipment || shipments[0];
+        if (!s) return;
+        const dt = getFormattedDateTime();
+        s.lastWebhookPayload = {
+          internalTrigger: 'MIDDLEWARE_CRON_TOKEN_REFRESH',
+          timestamp: dt.iso,
+          targetRut: s.lab.rut
+        };
+        s.lastMiddlewareSteps = [
+          `1. [PING] GET /WebApi/api/v1/login/echoping ➔ 200 OK (true)`,
+          `2. [CHECK USER] GET /WebApi/api/v1/login/echouser ➔ 200 OK (Rut autenticado)`,
+          `3. [AUTH] POST /WebApi/api/v1/login/authenticate (Username: "${s.lab.rut}")`,
+          `4. [JWT CACHE] Token Bearer almacenado en memoria del Middleware`
+        ];
+        s.lastCenabastMethod = 'POST';
+        s.lastCenabastEndpoint = '/WebApi/api/v1/login/authenticate';
+        s.lastCenabastPayload = {
+          Username: s.lab.rut,
+          Password: '&Clave^&API'
+        };
+        spawnTwoHopMiddlewarePacket(
+          s.lab.pos,
+          s,
+          '/login/authenticate',
+          'POST',
+          '/WebApi/api/v1/login/authenticate',
+          false,
+          'AUTH OAuth2 JWT',
+          'Token Bearer Activo'
+        );
+        selectModule('MIDDLEWARE', true);
+        renderInspector();
+      });
+
+      document.getElementById('btn-put-anexo3').addEventListener('click', () => {
+        const s = selectedShipment || shipments[0];
+        if (!s) return;
+        triggerStageIntegration(s, 6);
+        selectModule('MIDDLEWARE', false);
+        renderInspector();
+      });
+
+      document.getElementById('btn-error-400').addEventListener('click', () => {
+        const s = selectedShipment || shipments[0];
+        if (!s) return;
+        s.lastWebhookPayload = {
+          eventType: 'WEBHOOK.INVALID_FORMAT_TEST',
+          trackingNumber: s.trackingCode,
+          rawRutSent: '76.543.210-9'
+        };
+        s.lastMiddlewareSteps = [
+          `1. [PRUEBA DE ESTRÉS] Enviando Rut_Proveedor con puntos y guion ("76.543.210-9")`,
+          `2. [REGLA SECCIÓN 7.1] CENABAST rechaza caracteres especiales y Factura=0 con Guia=0`,
+          `3. [RESPUESTA] HTTP 400 Bad Request capturado por el Middleware para reintento`
+        ];
+        s.lastCenabastMethod = 'POST';
+        s.lastCenabastEndpoint = '/WebApi/api/v1/proveedor/distribucion';
+        s.lastCenabastPayload = {
+          Rut_Proveedor: '76.543.210-9',
+          Doc_Cenabast: s.docCenabast,
+          Factura: 0,
+          Fecha_Fac: "",
+          Guia: 0,
+          Fecha_Gui: ""
+        };
+        spawnTwoHopMiddlewarePacket(
+          s.lab.pos,
+          s,
+          '/distribucion',
+          'POST',
+          '/WebApi/api/v1/proveedor/distribucion',
+          true,
+          'RUT INVÁLIDO (Sec. 7.1)',
+          'Rechazo HTTP 400'
+        );
+        renderInspector();
+      });
+
+      document.getElementById('btn-pause').addEventListener('click', () => {
+        isPaused = !isPaused;
+        updatePauseButtonUI();
+        shipments.forEach(s => refreshShipmentMapTag(s));
+        renderShipmentsList();
+      });
+
+      document.getElementById('btn-step').addEventListener('click', () => {
+        const s = selectedShipment || shipments[0];
+        if (!s) return;
+        if (s.stage < 8) {
+          s.progress = 0;
+          s.stage++;
+          triggerStageIntegration(s, s.stage);
+          updateShipmentTransform3D(s);
+          renderShipmentsList();
+        }
+      });
+
+      document.getElementById('btn-auto').addEventListener('click', (e) => {
+        autoSpawn = !autoSpawn;
+        e.currentTarget.textContent = autoSpawn ? 'Auto: ON' : 'Auto: OFF';
+      });
+
+      const slider = document.getElementById('speed-slider');
+      slider.addEventListener('input', (e) => {
+        setSimulationSpeed(parseFloat(e.target.value));
+      });
+
+      document.querySelectorAll('.speed-preset').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setSimulationSpeed(parseFloat(btn.dataset.speed));
+        });
+      });
+
+      document.getElementById('chk-autopause').addEventListener('change', (e) => {
+        autoPauseOnApiHit = e.target.checked;
+      });
+
+      document.getElementById('btn-fit-scene').addEventListener('click', () => fitEntireNetwork3D(false));
+      document.getElementById('btn-top-view').addEventListener('click', () => fitEntireNetwork3D(true));
+      document.getElementById('btn-focus-mw').addEventListener('click', () => selectModule('MIDDLEWARE', true));
+      document.getElementById('btn-center-module').addEventListener('click', () => selectModule(selectedModuleKey, true));
+
+      document.getElementById('btn-follow-cam').addEventListener('click', () => {
+        followShipmentCamera = !followShipmentCamera;
+        updateFollowButtonUI();
+      });
+
+      document.getElementById('collapse-left').addEventListener('click', () => toggleDrawer('left', false));
+      document.getElementById('reopen-left').addEventListener('click', () => toggleDrawer('left', true));
+
+      document.getElementById('collapse-right').addEventListener('click', () => toggleDrawer('right', false));
+      document.getElementById('reopen-right').addEventListener('click', () => toggleDrawer('right', true));
+
+      document.getElementById('collapse-bottom').addEventListener('click', () => toggleDrawer('bottom', false));
+      document.getElementById('reopen-bottom').addEventListener('click', () => toggleDrawer('bottom', true));
+
+      let cinemaActive = false;
+      document.getElementById('btn-cinema-mode').addEventListener('click', (e) => {
+        cinemaActive = !cinemaActive;
+        toggleDrawer('left', !cinemaActive);
+        toggleDrawer('right', !cinemaActive);
+        toggleDrawer('bottom', !cinemaActive);
+        e.currentTarget.textContent = cinemaActive ? '🪟 Restaurar Tablas' : '👁️ Modo Cine';
+        fitEntireNetwork3D(false);
+      });
+
+      document.querySelectorAll('.insp-tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          activeInspectorTab = tab.dataset.tab;
+          document.querySelectorAll('.insp-tab').forEach((t) => {
+            const isAct = t.dataset.tab === activeInspectorTab;
+            t.className = isAct
+              ? 'insp-tab py-1.5 rounded-lg bg-amber-500/25 text-amber-300 border border-amber-500/40'
+              : 'insp-tab py-1.5 rounded-lg text-slate-400 hover:text-white';
+          });
+          renderInspector();
+        });
+      });
+
+      document.querySelectorAll('.mod-pill').forEach((pill) => {
+        pill.addEventListener('click', () => {
+          selectModule(pill.dataset.mod, true);
+        });
+      });
+    }
+
+    function setSimulationSpeed(val) {
+      simSpeed = val;
+      document.getElementById('speed-slider').value = String(val);
+      const tag = val <= 0.15 ? 'Ultra Lento' : val <= 0.35 ? 'Lento' : val <= 0.7 ? 'Medio' : val <= 1.1 ? 'Normal' : 'Rápido';
+      document.getElementById('speed-label').textContent = `${val.toFixed(2)}x ${tag}`;
+    }
+
+    function toggleDrawer(side, open) {
+      const panel = document.getElementById(`panel-${side}`);
+      const reopenBtn = document.getElementById(`reopen-${side}`);
+      panel.classList.toggle('collapsed', !open);
+      reopenBtn.classList.toggle('hidden', open);
+      applySmartViewportOffset();
+    }
+
+    /*************************************************************************
+     * 12. ARRANQUE INICIAL DE LA SIMULACIÓN
+     *************************************************************************/
+    initThree();
+    bindUIEvents();
+
+    spawnShipment({ labIdx: 0, docRule: 'guia', transport: 'air', finalOutcome: 1 });
+    setTimeout(() => {
+      spawnShipment({ labIdx: 2, docRule: 'factura', transport: 'ground', finalOutcome: 1 });
+    }, 900);
+
+    selectModule('MIDDLEWARE', false);
+    fitEntireNetwork3D(false);
+    animate();
+  </script>
+</body>
+</html>
